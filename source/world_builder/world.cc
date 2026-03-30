@@ -190,7 +190,7 @@ namespace WorldBuilder
       prm.declare_entry("compensation depth", Types::Double(250e3),
                         "Compensation depth for isostatic topography.");
 
-      prm.declare_entry("number of integration points", Types::Double(100),
+      prm.declare_entry("number of integration points", Types::Int(100),
                         "Number of integration points for calculating the compensation pressure.");
 
       prm.declare_entry("Reference profile point", Types::Point<2>(),
@@ -296,7 +296,7 @@ namespace WorldBuilder
     /**
      * Number of integration points for isostasy.
      */
-    number_integration_points = prm.get<double>("number of integration points");
+    number_integration_points = prm.get<int>("number of integration points");
 
     /**
      * Reference point for isostasy.
