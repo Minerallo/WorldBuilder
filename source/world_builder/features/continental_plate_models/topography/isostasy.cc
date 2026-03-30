@@ -27,6 +27,9 @@
 #include "world_builder/types/object.h"
 #include "world_builder/types/one_of.h"
 #include "world_builder/types/value_at_points.h"
+#include "world_builder/world.h"
+#include "world_builder/gravity_model/interface.h"
+
 
 namespace WorldBuilder
 {
@@ -43,11 +46,7 @@ namespace WorldBuilder
           :
           min_depth(NaN::DSNAN),
           max_depth(NaN::DSNAN),
-          operation(Operations::REPLACE),
-          crust_thickness(35e3),
-          reference_crust_thickness(35e3),
-          crust_density(2800.0),
-          mantle_density(3300.0)
+          operation(Operations::REPLACE)
         {
           this->world = world_;
           this->name = "isostasy";
@@ -60,7 +59,7 @@ namespace WorldBuilder
         Isostasy::declare_entries(Parameters &prm, const std::string & /*unused*/)
         {
           prm.declare_entry("", Types::Object(),
-                            "Simple Airy isostasy topography model for continental crust.");
+                            "Isostatic topography model based on vertical density-column integration.");
 
           prm.declare_entry("min depth", Types::OneOf(Types::Double(0),
                                                       Types::Array(Types::ValueAtPoints(0.,2)),
@@ -71,18 +70,6 @@ namespace WorldBuilder
                                                       Types::Array(Types::ValueAtPoints(std::numeric_limits<double>::max(),2)),
                                                       Types::String("")),
                             "The depth in meters to which this feature is present.");
-
-          prm.declare_entry("crust thickness", Types::Double(35e3),
-                            "Local crustal thickness in meters.");
-
-          prm.declare_entry("reference crust thickness", Types::Double(35e3),
-                            "Reference crustal thickness in meters for zero topography.");
-
-          prm.declare_entry("crust density", Types::Double(2800.0),
-                            "Crust density in kg/m^3.");
-
-          prm.declare_entry("mantle density", Types::Double(3300.0),
-                            "Mantle density in kg/m^3.");
         }
 
         void
@@ -93,25 +80,57 @@ namespace WorldBuilder
           max_depth_surface = Objects::Surface(prm.get("max depth",coordinates));
           max_depth = max_depth_surface.maximum;
           operation = string_operations_to_enum(prm.get<std::string>("operation"));
-
-          crust_thickness = prm.get<double>("crust thickness");
-          reference_crust_thickness = prm.get<double>("reference crust thickness");
-          crust_density = prm.get<double>("crust density");
-          mantle_density = prm.get<double>("mantle density");
-
-          WBAssertThrow(mantle_density > crust_density,
-                        "For simple Airy isostasy, mantle density must be larger than crust density.");
         }
 
         double
-        Isostasy::get_topography(const Point<3> & /*position_in_cartesian_coordinates*/,
-                                 const Objects::NaturalCoordinate & /*position_in_natural_coordinates*/,
+        Isostasy::get_topography(const Point<3> &position_in_cartesian_coordinates,
+                                 const Objects::NaturalCoordinate &position_in_natural_coordinates,
                                  double topography_) const
         {
-          // Simple Airy isostasy topography calculation:
+          (void) position_in_natural_coordinates;
+
+          WBAssertThrow(world->number_integration_points > 1,
+                        "The number of integration points for isostasy must be > 1.");
+
+          const double gravity = 
+            this->world->parameters.gravity_model->gravity_norm(position_in_cartesian_coordinates);
+
+          WBAssertThrow(std::fabs(gravity) > 0.0,
+                        "Gravity norm must be non-zero for isostasy calculation.");
+
+          const double dz =
+            this->world->compensation_depth / static_cast<double>(this->world->number_integration_points - 1);
+
+          double pressure_local = 0.0;
+
+          double density_prev =
+            world->properties(position_in_cartesian_coordinates.get_array(),
+                              0.0,
+                              {{{7,0,0}}})[0];
+
+          for (unsigned int i = 1; i < world->number_integration_points; ++i)
+            {
+              const double z = i * dz;
+
+              const double density =
+                world->properties(position_in_cartesian_coordinates.get_array(),
+                                  z,
+                                  {{{7,0,0}}})[0];
+
+              pressure_local += 0.5 * (density + density_prev) * dz * gravity;
+
+              density_prev = density;
+ 
+            }
           const double new_topography =
-            (crust_density / (mantle_density - crust_density)) *
-            (crust_thickness - reference_crust_thickness);
+            (world->compensation_pressure - pressure_local) /
+            (world->background_density * gravity);
+
+          std::cout << "Isostasy: compensation_pressure = " << world->compensation_pressure
+                    << ", pressure_local = " << pressure_local
+                    << ", new_topography = " << new_topography
+                    << ", background_density = " << world->background_density 
+                    << ", gravity = " << gravity << std::endl;
 
           return apply_operation(operation, topography_, new_topography);
         }

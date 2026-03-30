@@ -84,10 +84,10 @@ namespace WorldBuilder
             Objects::Surface max_depth_surface;
             Operations operation;
 
-            double crust_thickness;
-            double reference_crust_thickness;
-            double crust_density;
-            double mantle_density;
+            // double crust_thickness;
+            // double reference_crust_thickness;
+            // double crust_density;
+            // double mantle_density;
         };
       } // namespace Topography
     } // namespace ContinentalPlateModels
