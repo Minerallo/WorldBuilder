@@ -296,7 +296,7 @@ namespace WorldBuilder
     /**
      * Number of integration points for isostasy.
      */
-    number_integration_points = prm.get<int>("number of integration points");
+    number_integration_points = prm.get<unsigned int>("number of integration points");
 
     /**
      * Reference point for isostasy.
