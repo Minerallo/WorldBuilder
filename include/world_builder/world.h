@@ -325,7 +325,7 @@ namespace WorldBuilder
       /**
        * Todo
        */
-      int number_integration_points;
+      unsigned int number_integration_points;
 
       /**
        * Todo
