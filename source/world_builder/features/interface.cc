@@ -63,6 +63,12 @@ namespace WorldBuilder
     Interface::~Interface ()
       = default;
 
+    double
+    Interface::maximum_topography() const
+    {
+      return 0.0;
+    }
+
     void
     Interface::declare_entries(Parameters &prm, const std::string &parent_name, const std::vector<std::string> &required_entries)
     {
@@ -206,4 +212,3 @@ namespace WorldBuilder
 
   } // namespace Features
 } // namespace WorldBuilder
-

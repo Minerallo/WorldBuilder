@@ -398,10 +398,19 @@ namespace WorldBuilder
         }
     }
 
+    double
+    OceanicPlate::maximum_topography() const
+    {
+      double maximum = 0.0;
+      for (const auto &topography_model : topography_models)
+        maximum = std::max(maximum, topography_model->maximum_topography());
+
+      return maximum;
+    }
+
     /**
      * Register plugin
      */
     WB_REGISTER_FEATURE(OceanicPlate, oceanic plate)
   } // namespace Features
 } // namespace WorldBuilder
-

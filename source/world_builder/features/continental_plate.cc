@@ -388,6 +388,16 @@ namespace WorldBuilder
         }
     }
 
+    double
+    ContinentalPlate::maximum_topography() const
+    {
+      double maximum = 0.0;
+      for (const auto &topography_model : topography_models)
+        maximum = std::max(maximum, topography_model->maximum_topography());
+
+      return maximum;
+    }
+
     WB_REGISTER_FEATURE(ContinentalPlate, continental plate)
 
   } // namespace Features

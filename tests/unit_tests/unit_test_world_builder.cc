@@ -1046,6 +1046,21 @@ TEST_CASE("WorldBuilder interface")
   ApprovalTests::Approvals::verifyAll("TITLE", approvals);
 }
 
+TEST_CASE("WorldBuilder maximum topography")
+{
+  const std::string topography_file =
+    WorldBuilder::Data::WORLD_BUILDER_SOURCE_DIR +
+    "/tests/gwb-grid/cartesian_2d_topography.wb";
+  const WorldBuilder::World world_with_topography(topography_file);
+  CHECK(world_with_topography.maximum_topography() == Approx(7000.0));
+
+  const std::string no_topography_file =
+    WorldBuilder::Data::WORLD_BUILDER_SOURCE_DIR +
+    "/tests/data/continental_plate.wb";
+  const WorldBuilder::World world_without_topography(no_topography_file);
+  CHECK(world_without_topography.maximum_topography() == Approx(0.0));
+}
+
 TEST_CASE("Worldbuilder grains")
 {
   // creat a grains object
