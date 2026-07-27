@@ -106,6 +106,12 @@ namespace WorldBuilder
           return -topography_surface.minimum;
         }
 
+        double
+        DepthSurface::minimum_topography() const
+        {
+          return -topography_surface.maximum;
+        }
+
         WB_REGISTER_FEATURE_CONTINENTAL_PLATE_TOPOGRAPHY_MODEL(DepthSurface, depth surface)
       } // namespace Topography
     } // namespace ContinentalPlateModels

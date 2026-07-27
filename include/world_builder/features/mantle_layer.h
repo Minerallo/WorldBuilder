@@ -130,6 +130,10 @@ namespace WorldBuilder
                    const std::vector<size_t> &entry_in_output,
                    std::vector<double> &output) const override final;
 
+        double maximum_topography() const override final;
+
+        double minimum_topography() const override final;
+
       private:
         /**
          * A vector containing all the pointers to the temperature models. This vector is

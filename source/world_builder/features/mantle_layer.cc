@@ -343,6 +343,18 @@ namespace WorldBuilder
         }
     }
 
+    double
+    MantleLayer::maximum_topography() const
+    {
+      return 0.0;
+    }
+
+    double
+    MantleLayer::minimum_topography() const
+    {
+      return 0.0;
+    }
+
     WB_REGISTER_FEATURE(MantleLayer, mantle layer)
 
   } // namespace Features

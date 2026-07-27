@@ -139,6 +139,11 @@ namespace WorldBuilder
          */
         double maximum_topography() const override final;
 
+        /**
+         * Return a lower bound for all topography models in this feature.
+         */
+        double minimum_topography() const override final;
+
       private:
         /**
          * A vector containing all the pointers to the temperature models. This vector is

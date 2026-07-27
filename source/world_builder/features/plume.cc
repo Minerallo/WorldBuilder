@@ -482,6 +482,18 @@ namespace WorldBuilder
         }
     }
 
+    double
+    Plume::maximum_topography() const
+    {
+      return 0.0;
+    }
+
+    double
+    Plume::minimum_topography() const
+    {
+      return 0.0;
+    }
+
     WB_REGISTER_FEATURE(Plume, plume)
 
   } // namespace Features

@@ -940,7 +940,18 @@ namespace WorldBuilder
     /**
      * Register plugin
      */
+    double
+    SubductingPlate::maximum_topography() const
+    {
+      return 0.0;
+    }
+
+    double
+    SubductingPlate::minimum_topography() const
+    {
+      return 0.0;
+    }
+
     WB_REGISTER_FEATURE(SubductingPlate, subducting plate)
   } // namespace Features
 } // namespace WorldBuilder
-

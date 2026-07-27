@@ -30,7 +30,11 @@
 #include "world_builder/coordinate_systems/interface.h"
 #include "world_builder/coordinate_systems/invalid.h"
 #include "world_builder/features/continental_plate.h"
+#include "world_builder/features/fault.h"
 #include "world_builder/features/interface.h"
+#include "world_builder/features/mantle_layer.h"
+#include "world_builder/features/plume.h"
+#include "world_builder/features/subducting_plate.h"
 #include "world_builder/grains.h"
 #include "world_builder/objects/natural_coordinate.h"
 #include "world_builder/objects/segment.h"
@@ -1046,19 +1050,47 @@ TEST_CASE("WorldBuilder interface")
   ApprovalTests::Approvals::verifyAll("TITLE", approvals);
 }
 
-TEST_CASE("WorldBuilder maximum topography")
+TEST_CASE("WorldBuilder topography extrema")
 {
   const std::string topography_file =
     WorldBuilder::Data::WORLD_BUILDER_SOURCE_DIR +
     "/tests/gwb-grid/cartesian_2d_topography.wb";
   const WorldBuilder::World world_with_topography(topography_file);
   CHECK(world_with_topography.maximum_topography() == Approx(7000.0));
+  CHECK(world_with_topography.minimum_topography() == Approx(-1000.0));
+
+  const std::string depth_surface_file =
+    WorldBuilder::Data::WORLD_BUILDER_SOURCE_DIR +
+    "/tests/data/topography_extrema.wb";
+  const WorldBuilder::World world_with_depth_surface_topography(depth_surface_file);
+  CHECK(world_with_depth_surface_topography.maximum_topography() == Approx(9000.0));
+  CHECK(world_with_depth_surface_topography.minimum_topography() == Approx(-3000.0));
 
   const std::string no_topography_file =
     WorldBuilder::Data::WORLD_BUILDER_SOURCE_DIR +
     "/tests/data/continental_plate.wb";
   const WorldBuilder::World world_without_topography(no_topography_file);
   CHECK(world_without_topography.maximum_topography() == Approx(0.0));
+  CHECK(world_without_topography.minimum_topography() == Approx(0.0));
+}
+
+TEST_CASE("Features without topography report zero extrema")
+{
+  const WorldBuilder::Features::Fault fault(nullptr);
+  CHECK(fault.maximum_topography() == Approx(0.0));
+  CHECK(fault.minimum_topography() == Approx(0.0));
+
+  const WorldBuilder::Features::MantleLayer mantle_layer(nullptr);
+  CHECK(mantle_layer.maximum_topography() == Approx(0.0));
+  CHECK(mantle_layer.minimum_topography() == Approx(0.0));
+
+  const WorldBuilder::Features::Plume plume(nullptr);
+  CHECK(plume.maximum_topography() == Approx(0.0));
+  CHECK(plume.minimum_topography() == Approx(0.0));
+
+  const WorldBuilder::Features::SubductingPlate subducting_plate(nullptr);
+  CHECK(subducting_plate.maximum_topography() == Approx(0.0));
+  CHECK(subducting_plate.minimum_topography() == Approx(0.0));
 }
 
 TEST_CASE("Worldbuilder grains")

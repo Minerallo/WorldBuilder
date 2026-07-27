@@ -907,6 +907,18 @@ namespace WorldBuilder
     /**
      * Register plugin
      */
+    double
+    Fault::maximum_topography() const
+    {
+      return 0.0;
+    }
+
+    double
+    Fault::minimum_topography() const
+    {
+      return 0.0;
+    }
+
     WB_REGISTER_FEATURE(Fault, fault)
   } // namespace Features
 } // namespace WorldBuilder

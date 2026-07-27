@@ -146,6 +146,10 @@ namespace WorldBuilder
                    const std::vector<size_t> &entry_in_output,
                    std::vector<double> &output) const override final;
 
+        double maximum_topography() const override final;
+
+        double minimum_topography() const override final;
+
         /**
         * Returns a PlaneDistances object that has the distance from and along a fault plane,
         * calculated from the coordinates and the depth of the point.

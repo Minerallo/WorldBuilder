@@ -88,6 +88,12 @@ namespace WorldBuilder
             double maximum_topography() const = 0;
 
             /**
+             * Return a guaranteed lower bound for this topography model.
+             */
+            virtual
+            double minimum_topography() const = 0;
+
+            /**
              * A function to register a new type. This is part of the automatic
              * registration of the object factory.
              */

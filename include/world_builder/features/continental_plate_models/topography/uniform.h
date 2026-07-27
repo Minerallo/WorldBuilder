@@ -77,6 +77,8 @@ namespace WorldBuilder
 
             double maximum_topography() const override final;
 
+            double minimum_topography() const override final;
+
           private:
             // uniform topography submodule parameters
             double min_depth;

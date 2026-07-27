@@ -95,6 +95,13 @@ namespace WorldBuilder
       double maximum_topography() const;
 
       /**
+       * Return a guaranteed lower bound for topography produced by all
+       * configured features. The result is zero when no negative topography
+       * is configured.
+       */
+      double minimum_topography() const;
+
+      /**
        * Returns different values at a single point in one go stored in a vector of doubles.
        *
        * The properties input decides what each entry means, and the output is generated in the

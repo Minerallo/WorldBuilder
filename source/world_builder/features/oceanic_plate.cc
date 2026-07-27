@@ -35,6 +35,7 @@
 #include "world_builder/types/value_at_points.h"
 #include "world_builder/world.h"
 
+#include <algorithm>
 
 namespace WorldBuilder
 {
@@ -406,6 +407,16 @@ namespace WorldBuilder
         maximum = std::max(maximum, topography_model->maximum_topography());
 
       return maximum;
+    }
+
+    double
+    OceanicPlate::minimum_topography() const
+    {
+      double minimum = 0.0;
+      for (const auto &topography_model : topography_models)
+        minimum = std::min(minimum, topography_model->minimum_topography());
+
+      return minimum;
     }
 
     /**

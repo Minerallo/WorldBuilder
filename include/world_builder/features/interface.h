@@ -90,10 +90,17 @@ namespace WorldBuilder
 
         /**
          * Return a guaranteed upper bound for the topography produced by this
-         * feature. Features without topography return zero.
+         * feature.
          */
         virtual
-        double maximum_topography() const;
+        double maximum_topography() const = 0;
+
+        /**
+         * Return a guaranteed lower bound for the topography produced by this
+         * feature.
+         */
+        virtual
+        double minimum_topography() const = 0;
 
         /**
          * A function to register a new type. This is part of the automatic
