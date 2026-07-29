@@ -1074,23 +1074,25 @@ TEST_CASE("WorldBuilder topography extrema")
   CHECK(world_without_topography.minimum_topography() == Approx(0.0));
 }
 
-TEST_CASE("Features without topography report zero extrema")
+TEST_CASE("Features without topography report reduction identities")
 {
+  const double infinity = std::numeric_limits<double>::infinity();
+
   const WorldBuilder::Features::Fault fault(nullptr);
-  CHECK(fault.maximum_topography() == Approx(0.0));
-  CHECK(fault.minimum_topography() == Approx(0.0));
+  CHECK(fault.maximum_topography() == -infinity);
+  CHECK(fault.minimum_topography() == infinity);
 
   const WorldBuilder::Features::MantleLayer mantle_layer(nullptr);
-  CHECK(mantle_layer.maximum_topography() == Approx(0.0));
-  CHECK(mantle_layer.minimum_topography() == Approx(0.0));
+  CHECK(mantle_layer.maximum_topography() == -infinity);
+  CHECK(mantle_layer.minimum_topography() == infinity);
 
   const WorldBuilder::Features::Plume plume(nullptr);
-  CHECK(plume.maximum_topography() == Approx(0.0));
-  CHECK(plume.minimum_topography() == Approx(0.0));
+  CHECK(plume.maximum_topography() == -infinity);
+  CHECK(plume.minimum_topography() == infinity);
 
   const WorldBuilder::Features::SubductingPlate subducting_plate(nullptr);
-  CHECK(subducting_plate.maximum_topography() == Approx(0.0));
-  CHECK(subducting_plate.minimum_topography() == Approx(0.0));
+  CHECK(subducting_plate.maximum_topography() == -infinity);
+  CHECK(subducting_plate.minimum_topography() == infinity);
 }
 
 TEST_CASE("Worldbuilder grains")

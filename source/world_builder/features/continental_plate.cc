@@ -392,7 +392,7 @@ namespace WorldBuilder
     double
     ContinentalPlate::maximum_topography() const
     {
-      double maximum = 0.0;
+      double maximum = -std::numeric_limits<double>::infinity();
       for (const auto &topography_model : topography_models)
         maximum = std::max(maximum, topography_model->maximum_topography());
 
@@ -402,7 +402,7 @@ namespace WorldBuilder
     double
     ContinentalPlate::minimum_topography() const
     {
-      double minimum = 0.0;
+      double minimum = std::numeric_limits<double>::infinity();
       for (const auto &topography_model : topography_models)
         minimum = std::min(minimum, topography_model->minimum_topography());
 

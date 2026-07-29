@@ -910,13 +910,13 @@ namespace WorldBuilder
     double
     Fault::maximum_topography() const
     {
-      return 0.0;
+      return -std::numeric_limits<double>::infinity();
     }
 
     double
     Fault::minimum_topography() const
     {
-      return 0.0;
+      return std::numeric_limits<double>::infinity();
     }
 
     WB_REGISTER_FEATURE(Fault, fault)

@@ -943,13 +943,13 @@ namespace WorldBuilder
     double
     SubductingPlate::maximum_topography() const
     {
-      return 0.0;
+      return -std::numeric_limits<double>::infinity();
     }
 
     double
     SubductingPlate::minimum_topography() const
     {
-      return 0.0;
+      return std::numeric_limits<double>::infinity();
     }
 
     WB_REGISTER_FEATURE(SubductingPlate, subducting plate)

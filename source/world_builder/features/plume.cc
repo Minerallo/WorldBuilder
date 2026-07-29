@@ -485,13 +485,13 @@ namespace WorldBuilder
     double
     Plume::maximum_topography() const
     {
-      return 0.0;
+      return -std::numeric_limits<double>::infinity();
     }
 
     double
     Plume::minimum_topography() const
     {
-      return 0.0;
+      return std::numeric_limits<double>::infinity();
     }
 
     WB_REGISTER_FEATURE(Plume, plume)
