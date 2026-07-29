@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>GWB WebAssembly smoke test</title>
+  </head>
+  <body>
+    <main>
+      <h1>GWB WebAssembly smoke test</h1>
+      <pre id="result" role="status">Starting…</pre>
+    </main>
+    <script>
+      if (location.protocol === "file:") {
+        document.querySelector("#result").textContent =
+          "This test must be opened through the GWB web server.\n\n" +
+          "Run `npm start` in contrib/world_builder_gui, then open:\n" +
+          "http://127.0.0.1:4173/tests/wasm-smoke.html";
+      }
+    </script>
+    <script type="module" src="wasm-smoke.mjs"></script>
+  </body>
+</html>

@@ -45,6 +45,7 @@ set (WORLD_BUILDER_SOURCE_DIR ${PROJECT_SOURCE_DIR})
 set(WB_ENABLE_APPS ON CACHE BOOL "If enabled, applications gwb-grid and gwb-dat are built.")
 set(WB_ENABLE_HELPER_TARGETS ON CACHE BOOL "If enabled, targets to indenting and switching to debug/release mode are configured.")
 set(WB_ENABLE_TESTS ON CACHE BOOL "If enabled, tests are configured.")
+set(WB_ENABLE_WEB ${EMSCRIPTEN} CACHE BOOL "If enabled, the browser WebAssembly module is built.")
 
 
 # generate version.cc
@@ -289,6 +290,21 @@ if(WB_ENABLE_APPS)
   add_executable(gwb-grid "${CMAKE_CURRENT_SOURCE_DIR}/source/gwb-grid/main.cc")
 endif()
 
+if(WB_ENABLE_WEB)
+  if(NOT EMSCRIPTEN)
+    message(FATAL_ERROR "WB_ENABLE_WEB requires the Emscripten toolchain.")
+  endif()
+
+  add_executable(gwb-web "${CMAKE_CURRENT_SOURCE_DIR}/source/gwb-web/bindings.cc")
+  set_target_properties(gwb-web PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    OUTPUT_NAME "gwb-web"
+    SUFFIX ".js"
+    RUNTIME_OUTPUT_DIRECTORY
+      "${CMAKE_CURRENT_SOURCE_DIR}/contrib/world_builder_gui/wasm")
+endif()
+
 if(MAKE_PYTHON_WRAPPER)
 
   if(POLICY CMP0078)
@@ -518,6 +534,23 @@ if(WB_ENABLE_APPS)
   foreach (_app ${_apps})
     target_link_libraries (${_app} ${_mpi_deb} ${_libs})
   endforeach()
+endif()
+
+if(WB_ENABLE_WEB)
+  target_compile_options(gwb-web PRIVATE -fexceptions)
+  target_link_libraries(gwb-web PRIVATE ${GWB_LIBRARY_WHOLE})
+  target_link_options(gwb-web PRIVATE
+    --bind
+    -fexceptions
+    -sDISABLE_EXCEPTION_CATCHING=0
+    -sMODULARIZE=1
+    -sEXPORT_ES6=1
+    -sEXPORT_NAME=createGwbModule
+    -sENVIRONMENT=worker
+    -sFILESYSTEM=1
+    -sALLOW_MEMORY_GROWTH=1
+    -sINITIAL_MEMORY=67108864
+    -sMAXIMUM_MEMORY=2147483648)
 endif()
 
 if(MAKE_PYTHON_WRAPPER)

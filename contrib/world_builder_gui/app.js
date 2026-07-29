@@ -1,13 +1,17 @@
 import {
   FEATURE_TYPES, DEFAULT_SETTINGS, createFeature, buildWorldBuilder, buildGrid, buildVtp,
+  buildLegacyVtk, buildObj, buildGeoJson, buildGeometryCsv,
   connectFeatures, validateProject, importWorldBuilder, importFeature,
   applyGridConfig, featureToWorldBuilder, geologicalLayerPreset, createPlacementPoints
 } from "./core.js";
 import { TOMOGRAPHY_CATALOG, searchTomographyModels, tomographyModelById } from "./tomography-catalog.mjs";
+import { LITHOSPHERE_CATALOG, searchLithosphereModels, lithosphereModelById } from "./lithosphere-catalog.mjs";
+import { parseLithosphereTable, regularLithosphereGrid, remapGeographicGridToCartesian } from "./lithosphere-table.mjs";
 import { parseWorldBuilderText, serializeWorldBuilder } from "./wb-provenance.mjs";
+import { PLANETARY_BODY_CATALOG, searchPlanetaryBodies, planetaryBodyById } from "./planetary-catalog.mjs";
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
-const COLOR_MAP_VERSION = 2;
+const COLOR_MAP_VERSION = 4;
 const DEFAULT_APPEARANCE = {
   theme: "dark", renderMode: "geology", shading: true, light: 65,
   autoTemperaturePreview: true, temperatureContours: true, slabProjection: true, temperatureMin: 273, temperatureMax: 1800,
@@ -31,9 +35,13 @@ const DEFAULT_TOMOGRAPHY = {
   scalarField: "dvs", vpVsRatio: 1.8, isoValue: 0.5, isoMode: "above",
   showIso: true, isoThicknessKm: 100
 };
+const DEFAULT_LITHOSPHERE = {
+  visible: true, opacity: 72, grid: null, selectedModelId: null, sourceName: null
+};
 const DEFAULT_EXPORT_OPTIONS = { comments: true, references: true };
 const COLOR_PRESETS = {
   "crameri-vik": ["#001261", "#034481", "#307da6", "#94bed2", "#ece5e0", "#dbaa8d", "#c27041", "#912d06", "#590008"],
+  "crameri-oleron": ["#1a2659", "#4c598c", "#8390c3", "#bcc9f3", "#e6f2ff", "#1a4c00", "#63640a", "#aa9050", "#edc99d", "#fdfde6"],
   thermal: ["#07104d", "#225bd6", "#8a2be2", "#e43b31", "#ff9b24", "#fff36a", "#ffffff"],
   coolwarm: ["#2166ac", "#67a9cf", "#f7f7f7", "#ef8a62", "#b2182b"],
   viridis: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
@@ -41,20 +49,44 @@ const COLOR_PRESETS = {
   terrain: ["#123f78", "#2691bd", "#4f8f55", "#a8b86c", "#a97545", "#ffffff"],
   grayscale: ["#101010", "#777777", "#f7f7f7"]
 };
+const OLERON_TWO_SLOPE_POSITIONS = {
+  ocean: [0, 2133.333333 / 8500, 4266.666667 / 8500, 6400 / 8500, 8466.666667 / 8500],
+  land: [0, 1147.058824 / 4500, 2276.470588 / 4500, 3405.882353 / 4500, 1]
+};
+const PLANETARY_VISUALS = {
+  earth: ["#eef9f7", "#477f91", "#102d3a"],
+  moon: ["#f0eee7", "#9a968b", "#393936"],
+  mars: ["#ffd7ad", "#b85f39", "#52251f"],
+  venus: ["#fff0ba", "#c58b47", "#5b3423"],
+  mercury: ["#eee9dd", "#8b8175", "#37332f"],
+  io: ["#fff3a8", "#d49a32", "#5c3920"],
+  europa: ["#f4f1dc", "#9f9276", "#3d3f43"],
+  ganymede: ["#e2d4bd", "#817466", "#34313a"],
+  titan: ["#f8dda1", "#bb7635", "#44312c"],
+  enceladus: ["#f7ffff", "#a7c7d4", "#334851"],
+  pluto: ["#ead9c9", "#977866", "#332b2e"]
+};
 const DEFAULT_COLOR_MAPS = {
   temperature: { preset: "thermal", min: 273, max: 1800, reverse: false, steps: 0, opacity: 100, colors: ["#07104d", "#e43b31", "#ffffff"] },
   gravity: { preset: "coolwarm", min: -100, max: 100, reverse: false, steps: 0, opacity: 55, colors: ["#2166ac", "#f7f7f7", "#b2182b"] },
   tomography: { preset: "crameri-vik", min: -1, max: 1, reverse: false, steps: 0, opacity: 76, colors: ["#001261", "#ece5e0", "#590008"] },
-  topography: { preset: "terrain", min: -5000, max: 5000, reverse: false, steps: 0, opacity: 70, colors: ["#123f78", "#4f8f55", "#ffffff"] }
+  lithosphere: { preset: "viridis", min: 0, max: 1, reverse: false, steps: 0, opacity: 72, colors: ["#440154", "#21918c", "#fde725"] },
+  topography: { preset: "crameri-oleron", min: -8500, max: 4500, reverse: false, steps: 0, opacity: 70, colors: ["#1a2659", "#e6f2ff", "#fdfde6"] }
 };
 const DEFAULT_SCENE_LAYERS = {
   grid: true, features: true, labels: true, connections: true, slabs: true,
-  topography: true, paleogeography: true, referenceMap: true, tomography: true, gravity: true, legend: true
+  topography: true, paleogeography: true, referenceMap: true, tomography: true,
+  lithosphere: true, gravity: true, legend: true
 };
 const DEFAULT_UI = {
   paletteCollapsed: false, inspectorCollapsed: false, splitView: false,
   linkedCameras: true, secondaryView: "three-d", secondaryCamera: null,
   cameraControls: null, floatingEditors: {}, areaPlacementShape: "rectangle", linePlacementShape: "straight",
+  gravityLegendPositions: { primary: null, secondary: null },
+  cameraControlsExpanded: false,
+  gravityWorkspaceMinimized: false, gravityWorkspaceLayout: "triple",
+  gravityWorkspaceContoursOnly: false,
+  gravityWorkspaceSectionPicking: false, gravityWorkspaceContourEditing: false,
   compactPanel: null
 };
 const primaryCanvas = document.querySelector("#model-canvas");
@@ -66,6 +98,10 @@ const gravity3DCanvas = document.querySelector("#gravity-3d-canvas");
 const gravitySectionCanvas = document.querySelector("#gravity-section-canvas");
 let canvas = primaryCanvas;
 let context = primaryContext;
+let renderOptions = {
+  featureContoursOnly: false, suppressFeatureHandles: false,
+  featureVertexHandlesOnly: false, suppressGravityLegend: false
+};
 const wrap = document.querySelector("#canvas-wrap");
 let state = loadState();
 let selectedId = null;
@@ -86,6 +122,7 @@ let selectedPointIndex = null;
 let hoverPoint = null;
 let referenceImage = null;
 let tomographyRequest = null;
+let lithosphereTable = null;
 let topographyImage = null;
 let terrainDrawing = false;
 let terrainSelection = [];
@@ -94,9 +131,14 @@ let cameraDrag = null;
 let marqueeSelection = null;
 let cameraControlsDrag = null;
 let gravityWorkspaceDrag = null;
+let gravityWorkspaceGeometryDrag = null;
+let gravityLegendDrag = null;
+let gravityLegendBounds = { primary: null, secondary: null };
 let floatingEditorDrag = null;
 let floatingEditorZ = 10;
 let researchTimer = null;
+let activitySequence = 0;
+let activityHideTimer = null;
 let activeViewport = "primary";
 let viewportModes = { primary: "plan", secondary: state.ui.secondaryView || "three-d" };
 let viewportCameras = {
@@ -136,17 +178,34 @@ function loadState() {
       saved.sceneLayers = { ...DEFAULT_SCENE_LAYERS, ...(saved.sceneLayers || {}) };
       saved.gravity = { ...DEFAULT_GRAVITY, ...(saved.gravity || {}) };
       saved.tomography = { ...DEFAULT_TOMOGRAPHY, ...(saved.tomography || {}) };
+      saved.lithosphere = { ...DEFAULT_LITHOSPHERE, ...(saved.lithosphere || {}) };
       saved.provenance = {
-        tomographyModelIds: Array.isArray(saved.provenance?.tomographyModelIds) ? saved.provenance.tomographyModelIds : []
+        tomographyModelIds: Array.isArray(saved.provenance?.tomographyModelIds) ? saved.provenance.tomographyModelIds : [],
+        lithosphereModelIds: Array.isArray(saved.provenance?.lithosphereModelIds) ? saved.provenance.lithosphereModelIds : []
       };
       saved.exportOptions = { ...DEFAULT_EXPORT_OPTIONS, ...(saved.exportOptions || {}) };
+      const storedColorMapVersion = Number(saved.colorMapVersion || 0);
+      const storedTopographyPreset = saved.colorMaps?.topography?.preset;
       saved.colorMaps = Object.fromEntries(Object.entries(DEFAULT_COLOR_MAPS).map(([key, value]) => [key, { ...value, ...(saved.colorMaps?.[key] || {}) }]));
-      if (Number(saved.colorMapVersion || 0) < COLOR_MAP_VERSION) {
+      if (storedColorMapVersion < 2) {
         saved.colorMaps.tomography = { ...DEFAULT_COLOR_MAPS.tomography };
-        saved.colorMapVersion = COLOR_MAP_VERSION;
       }
+      if (storedColorMapVersion < 3 && (!storedTopographyPreset || storedTopographyPreset === "terrain")) {
+        saved.colorMaps.topography.preset = DEFAULT_COLOR_MAPS.topography.preset;
+        saved.colorMaps.topography.colors = [...DEFAULT_COLOR_MAPS.topography.colors];
+      }
+      if (storedColorMapVersion < 4 && saved.colorMaps.topography.preset === "crameri-oleron"
+        && Number(saved.colorMaps.topography.min) === -5000 && Number(saved.colorMaps.topography.max) === 5000) {
+        saved.colorMaps.topography.min = DEFAULT_COLOR_MAPS.topography.min;
+        saved.colorMaps.topography.max = DEFAULT_COLOR_MAPS.topography.max;
+      }
+      saved.colorMapVersion = COLOR_MAP_VERSION;
       saved.layerGroups = Array.isArray(saved.layerGroups) ? saved.layerGroups : [];
       saved.ui = { ...DEFAULT_UI, ...(saved.ui || {}) };
+      saved.ui.gravityLegendPositions = {
+        primary: saved.ui.gravityLegendPositions?.primary || null,
+        secondary: saved.ui.gravityLegendPositions?.secondary || null
+      };
       saved.sectionPath = Array.isArray(saved.sectionPath) ? saved.sectionPath : (saved.settings.section || []);
       return saved;
     }
@@ -155,8 +214,8 @@ function loadState() {
     settings: { ...DEFAULT_SETTINGS }, features: [], connections: [], rawWorld: null,
     appearance: { ...DEFAULT_APPEARANCE }, topography: { ...DEFAULT_TOPOGRAPHY },
     paleogeography: { ...DEFAULT_PALEOGEOGRAPHY }, sceneLayers: { ...DEFAULT_SCENE_LAYERS },
-    gravity: { ...DEFAULT_GRAVITY }, tomography: { ...DEFAULT_TOMOGRAPHY },
-    provenance: { tomographyModelIds: [] }, exportOptions: { ...DEFAULT_EXPORT_OPTIONS },
+    gravity: { ...DEFAULT_GRAVITY }, tomography: { ...DEFAULT_TOMOGRAPHY }, lithosphere: { ...DEFAULT_LITHOSPHERE },
+    provenance: { tomographyModelIds: [], lithosphereModelIds: [] }, exportOptions: { ...DEFAULT_EXPORT_OPTIONS },
     colorMaps: structuredClone(DEFAULT_COLOR_MAPS), colorMapVersion: COLOR_MAP_VERSION,
     layerGroups: [], ui: { ...DEFAULT_UI }, sectionPath: []
   };
@@ -230,13 +289,22 @@ function restoreProjectStateDocument(documentState) {
     sceneLayers: { ...DEFAULT_SCENE_LAYERS, ...(restored.sceneLayers || {}) },
     gravity: { ...DEFAULT_GRAVITY, ...(restored.gravity || {}) },
     tomography: { ...DEFAULT_TOMOGRAPHY, ...(restored.tomography || {}) },
+    lithosphere: { ...DEFAULT_LITHOSPHERE, ...(restored.lithosphere || {}) },
     provenance: {
-      tomographyModelIds: Array.isArray(restored.provenance?.tomographyModelIds) ? restored.provenance.tomographyModelIds : []
+      tomographyModelIds: Array.isArray(restored.provenance?.tomographyModelIds) ? restored.provenance.tomographyModelIds : [],
+      lithosphereModelIds: Array.isArray(restored.provenance?.lithosphereModelIds) ? restored.provenance.lithosphereModelIds : []
     },
     exportOptions: { ...DEFAULT_EXPORT_OPTIONS, ...(restored.exportOptions || {}) },
     colorMapVersion: COLOR_MAP_VERSION,
     layerGroups: Array.isArray(restored.layerGroups) ? restored.layerGroups : [],
-    ui: { ...DEFAULT_UI, ...(restored.ui || {}) }
+    ui: {
+      ...DEFAULT_UI,
+      ...(restored.ui || {}),
+      gravityLegendPositions: {
+        primary: restored.ui?.gravityLegendPositions?.primary || null,
+        secondary: restored.ui?.gravityLegendPositions?.secondary || null
+      }
+    }
   };
   const workspace = documentState.workspace || {};
   const validModes = new Set(["plan", "three-d", "section"]);
@@ -497,6 +565,11 @@ function canvasPoint(event) {
   return screenPointToCanvas(event.clientX - rect.left, event.clientY - rect.top);
 }
 
+function rawCanvasPoint(target, event) {
+  const rect = target.getBoundingClientRect();
+  return [event.clientX - rect.left, event.clientY - rect.top];
+}
+
 function applyWorkspaceUI() {
   state.ui = { ...DEFAULT_UI, ...(state.ui || {}) };
   const workspace = document.querySelector(".workspace");
@@ -518,6 +591,7 @@ function applyWorkspaceUI() {
   document.querySelector("#link-cameras").classList.toggle("hidden", !state.ui.splitView);
   document.querySelector("#link-cameras").classList.toggle("active", state.ui.linkedCameras);
   document.querySelector("#link-cameras").setAttribute("aria-pressed", String(state.ui.linkedCameras));
+  syncCameraControlsExpansion();
   requestAnimationFrame(resize);
 }
 
@@ -550,9 +624,23 @@ function applyViewTransform() {
 
 function updateCameraUI() {
   const camera = viewportCameras[activeViewport];
-  document.querySelector("#zoom-level").textContent = `${Math.round((Number(camera.zoom) || 1) * 100)}%`;
+  const zoomText = `${Math.round((Number(camera.zoom) || 1) * 100)}%`;
+  document.querySelector("#zoom-level").textContent = zoomText;
+  document.querySelector("#camera-zoom-compact").textContent = zoomText;
   document.querySelector("#pan-camera").classList.toggle("active", cameraPanMode);
   document.querySelector("#pan-camera").setAttribute("aria-pressed", String(cameraPanMode));
+}
+
+function syncCameraControlsExpansion() {
+  const controls = document.querySelector(".camera-controls");
+  const toggle = document.querySelector("#toggle-camera-controls");
+  if (!controls || !toggle) return;
+  const expanded = Boolean(state.ui?.cameraControlsExpanded);
+  controls.classList.toggle("collapsed", !expanded);
+  toggle.setAttribute("aria-expanded", String(expanded));
+  toggle.setAttribute("aria-label", expanded ? "Close camera controls" : "Open camera controls");
+  toggle.title = expanded ? "Close camera controls" : "Open camera controls";
+  document.querySelector("#camera-toggle-icon").textContent = expanded ? "⌃" : "⌖";
 }
 
 function changeCamera({ zoomFactor = 1, rotationDelta = 0, orbitYawDelta = 0, orbitPitchDelta = 0, panX = 0, panY = 0, reset = false }) {
@@ -618,6 +706,24 @@ function colorMapStops(field) {
   return map.reverse ? [...colors].reverse() : colors;
 }
 
+function colorMapPositions(field) {
+  const map = ensureColorMaps()[field];
+  const colors = colorMapStops(field);
+  const minimum = Number(map.min);
+  const maximum = Number(map.max);
+  let positions;
+  if (map.preset === "crameri-oleron" && minimum < 0 && maximum > 0 && colors.length === 10) {
+    const seaLevel = -minimum / (maximum - minimum);
+    positions = [
+      ...OLERON_TWO_SLOPE_POSITIONS.ocean.map(position => position * seaLevel),
+      ...OLERON_TWO_SLOPE_POSITIONS.land.map(position => seaLevel + position * (1 - seaLevel))
+    ];
+  } else {
+    positions = colors.map((_, index) => index / Math.max(1, colors.length - 1));
+  }
+  return map.reverse ? positions.map(position => 1 - position).reverse() : positions;
+}
+
 function scalarRgb(field, value, fallbackMinimum, fallbackMaximum) {
   const map = ensureColorMaps()[field];
   const minimum = Number.isFinite(Number(map.min)) ? Number(map.min) : fallbackMinimum;
@@ -626,10 +732,12 @@ function scalarRgb(field, value, fallbackMinimum, fallbackMaximum) {
   const steps = Number(map.steps) || 0;
   if (steps >= 2) t = Math.round(t * (steps - 1)) / (steps - 1);
   const colors = colorMapStops(field).map(hexToRgb);
-  const scaled = t * (colors.length - 1);
-  const lowerIndex = Math.min(colors.length - 1, Math.floor(scaled));
-  const upperIndex = Math.min(colors.length - 1, lowerIndex + 1);
-  const amount = scaled - lowerIndex;
+  const positions = colorMapPositions(field);
+  let upperIndex = positions.findIndex(position => position >= t);
+  if (upperIndex < 0) upperIndex = colors.length - 1;
+  const lowerIndex = Math.max(0, upperIndex - 1);
+  const span = Math.max(1e-12, positions[upperIndex] - positions[lowerIndex]);
+  const amount = upperIndex === lowerIndex ? 0 : (t - positions[lowerIndex]) / span;
   return colors[lowerIndex].map((channel, index) => Math.round(channel + (colors[upperIndex][index] - channel) * amount));
 }
 
@@ -663,6 +771,7 @@ function featureTemperature(feature) {
 }
 
 function featureFill(feature, points, alpha = .34) {
+  if (renderOptions.featureContoursOnly) return "rgba(0,0,0,0)";
   const meta = FEATURE_TYPES[feature.model];
   const temperature = featureTemperature(feature);
   const base = state.appearance.renderMode === "temperature" ? temperatureColor(temperature, alpha) : `${meta.color}${Math.round(alpha * 255).toString(16).padStart(2, "0")}`;
@@ -750,6 +859,47 @@ function terrainBounds() {
     west: Number(state.settings.xMin), east: Number(state.settings.xMax),
     south: Number(state.settings.yMin), north: Number(state.settings.yMax)
   };
+}
+
+function geographicSourceBounds() {
+  if (state.settings.coordinateSystem === "spherical") {
+    return {
+      west: Number(state.settings.xMin), east: Number(state.settings.xMax),
+      south: Number(state.settings.yMin), north: Number(state.settings.yMax)
+    };
+  }
+  const bounds = {
+    west: Number(state.settings.geographicSourceWest ?? -20),
+    east: Number(state.settings.geographicSourceEast ?? 20),
+    south: Number(state.settings.geographicSourceSouth ?? -15),
+    north: Number(state.settings.geographicSourceNorth ?? 15)
+  };
+  if (!(bounds.west < bounds.east && bounds.south < bounds.north)) {
+    throw new Error("Geographic source bounds must have west < east and south < north.");
+  }
+  return bounds;
+}
+
+function cartesianModelBounds() {
+  return {
+    west: Number(state.settings.xMin), east: Number(state.settings.xMax),
+    south: Number(state.settings.yMin), north: Number(state.settings.yMax)
+  };
+}
+
+function syncGeographicBoundsUI() {
+  const values = {
+    west: state.settings.geographicSourceWest ?? -20,
+    east: state.settings.geographicSourceEast ?? 20,
+    south: state.settings.geographicSourceSouth ?? -15,
+    north: state.settings.geographicSourceNorth ?? 15
+  };
+  document.querySelectorAll("[data-geographic-bound]").forEach(input => {
+    input.value = values[input.dataset.geographicBound];
+  });
+  document.querySelectorAll("[data-cartesian-mapping-note]").forEach(note => {
+    note.classList.toggle("hidden", state.settings.coordinateSystem === "spherical");
+  });
 }
 
 function ensureTopography() {
@@ -972,11 +1122,37 @@ function gravityColor(value, limit, alpha = 1) {
   return `rgba(${rgb.join(",")},${alpha})`;
 }
 
+function gravityScaleLimit(result) {
+  const magnitude = Math.max(Math.abs(Number(result?.min) || 0), Math.abs(Number(result?.max) || 0));
+  return magnitude > 0 ? magnitude : 1;
+}
+
+function gravityFieldLabel(field) {
+  return {
+    bouguer: "Bouguer anomaly",
+    "free-air": "Free-air anomaly",
+    residual: "Residual gravity",
+    gxx: "Gravity gradient Gxx",
+    gxy: "Gravity gradient Gxy",
+    gxz: "Gravity gradient Gxz",
+    gyy: "Gravity gradient Gyy",
+    gyz: "Gravity gradient Gyz",
+    gzz: "Gravity gradient Gzz"
+  }[field] || String(field).toUpperCase();
+}
+
+function formatGravityScaleValue(value, unit) {
+  const absolute = Math.abs(value);
+  const digits = absolute >= 100 ? 0 : absolute >= 10 ? 1 : absolute >= 1 ? 2 : 3;
+  const number = value.toFixed(digits);
+  return `${value > 0 ? "+" : ""}${number}${unit ? ` ${unit}` : ""}`;
+}
+
 function drawGravityOverlay() {
   const gravity = ensureGravity();
   if (!gravity.enabled || !sceneLayerVisible("gravity")) return;
   const result = computeGravityPreview();
-  const limit = Math.max(Math.abs(result.min), Math.abs(result.max), 1);
+  const limit = gravityScaleLimit(result);
   const xStep = (Number(state.settings.xMax) - Number(state.settings.xMin)) / result.nx;
   const yStep = (Number(state.settings.yMax) - Number(state.settings.yMin)) / result.ny;
   context.save();
@@ -1000,7 +1176,7 @@ function drawGravity3DOverlay() {
   const gravity = ensureGravity();
   if (!gravity.enabled || !sceneLayerVisible("gravity")) return;
   const result = computeGravityPreview();
-  const limit = Math.max(Math.abs(result.min), Math.abs(result.max), 1e-9);
+  const limit = gravityScaleLimit(result);
   const xStep = (Number(state.settings.xMax) - Number(state.settings.xMin)) / result.nx;
   const yStep = (Number(state.settings.yMax) - Number(state.settings.yMin)) / result.ny;
   context.save();
@@ -1015,6 +1191,103 @@ function drawGravity3DOverlay() {
     context.beginPath(); context.moveTo(...corners[0]); corners.slice(1).forEach(point => context.lineTo(...point)); context.closePath(); context.fill();
   });
   context.restore();
+}
+
+function drawGravityLegend(width) {
+  if (renderOptions.suppressGravityLegend) return;
+  const gravity = ensureGravity();
+  const viewportName = canvas === secondaryCanvas ? "secondary" : "primary";
+  if (!gravity.enabled || !sceneLayerVisible("gravity") || !sceneLayerVisible("legend")) {
+    gravityLegendBounds[viewportName] = null;
+    return;
+  }
+  const result = computeGravityPreview();
+  const limit = gravityScaleLimit(result);
+  const legendWidth = Math.min(200, Math.max(120, width - 40));
+  const legendHeight = 52;
+  state.ui.gravityLegendPositions ||= { primary: null, secondary: null };
+  const saved = state.ui.gravityLegendPositions[viewportName];
+  const defaultX = Math.max(10, width - legendWidth - 20);
+  const x = Math.max(10, Math.min(width - legendWidth - 10, Number(saved?.x ?? defaultX)));
+  const y = Math.max(25, Math.min(canvas.clientHeight - 27, Number(saved?.y ?? 44)));
+  gravityLegendBounds[viewportName] = { x: x - 10, y: y - 25, width: legendWidth + 20, height: legendHeight };
+  const gradient = context.createLinearGradient(x, 0, x + legendWidth, 0);
+  colorMapStops("gravity").forEach((color, index, colors) =>
+    gradient.addColorStop(index / Math.max(1, colors.length - 1), color));
+  context.save();
+  context.fillStyle = state.appearance.theme === "light" ? "rgba(255,255,255,.90)" : "rgba(5,10,13,.82)";
+  context.fillRect(x - 10, y - 25, legendWidth + 20, 52);
+  context.fillStyle = state.appearance.theme === "light" ? "#172329" : "#edf3f0";
+  context.font = "700 8px ui-monospace";
+  context.fillText("⋮⋮", x, y - 12);
+  context.fillText(`${gravityFieldLabel(gravity.field).toUpperCase()} · ${result.unit}`, x + 16, y - 12);
+  context.fillStyle = gradient;
+  context.fillRect(x, y, legendWidth, 10);
+  context.strokeStyle = state.appearance.theme === "light" ? "#52656e" : "#96a7ad";
+  context.strokeRect(x, y, legendWidth, 10);
+  context.beginPath();
+  context.moveTo(x + legendWidth / 2, y - 2);
+  context.lineTo(x + legendWidth / 2, y + 13);
+  context.stroke();
+  context.fillStyle = state.appearance.theme === "light" ? "#172329" : "#edf3f0";
+  context.font = "9px ui-monospace";
+  const low = formatGravityScaleValue(-limit, "");
+  const zero = "0";
+  const high = formatGravityScaleValue(limit, "");
+  context.fillText(low, x, y + 23);
+  context.fillText(zero, x + legendWidth / 2 - context.measureText(zero).width / 2, y + 23);
+  context.fillText(high, x + legendWidth - context.measureText(high).width, y + 23);
+  context.restore();
+}
+
+function gravityLegendHit(viewport, point) {
+  const bounds = gravityLegendBounds[viewport];
+  return bounds && point[0] >= bounds.x && point[0] <= bounds.x + bounds.width
+    && point[1] >= bounds.y && point[1] <= bounds.y + bounds.height;
+}
+
+function beginGravityLegendDrag(viewport, target, event, point) {
+  if (event.button !== 0 || !gravityLegendHit(viewport, point)) return false;
+  const bounds = gravityLegendBounds[viewport];
+  gravityLegendDrag = {
+    viewport,
+    target,
+    pointerId: event.pointerId,
+    offsetX: point[0] - (bounds.x + 10),
+    offsetY: point[1] - (bounds.y + 25)
+  };
+  target.style.cursor = "grabbing";
+  target.setPointerCapture(event.pointerId);
+  event.preventDefault();
+  return true;
+}
+
+function moveGravityLegend(event, point) {
+  if (!gravityLegendDrag) return false;
+  state.ui.gravityLegendPositions ||= { primary: null, secondary: null };
+  state.ui.gravityLegendPositions[gravityLegendDrag.viewport] = {
+    x: point[0] - gravityLegendDrag.offsetX,
+    y: point[1] - gravityLegendDrag.offsetY
+  };
+  draw();
+  return true;
+}
+
+function finishGravityLegendDrag(target) {
+  if (!gravityLegendDrag) return false;
+  gravityLegendDrag = null;
+  target.style.cursor = "grab";
+  persist();
+  draw();
+  return true;
+}
+
+function resetGravityLegend(viewport) {
+  state.ui.gravityLegendPositions ||= { primary: null, secondary: null };
+  state.ui.gravityLegendPositions[viewport] = null;
+  persist();
+  draw();
+  showToast("Gravity scale position reset");
 }
 
 function topographyModelForFeature(feature) {
@@ -1359,6 +1632,7 @@ function drawGrid(width, height) {
   context.fillStyle = palette.background;
   context.fillRect(0, 0, width, height);
   drawReferenceImage(width, height);
+  drawLithosphereGrid();
   drawTomographyGrid();
   drawTopographySurface();
   drawPaleogeography();
@@ -1515,6 +1789,51 @@ function drawTomographyLegend(width, height) {
   context.font = "9px ui-monospace"; context.fillStyle = "#edf3f0";
   context.fillText(Number(map.min).toFixed(2), x, y + 20);
   const maxLabel = Number(map.max).toFixed(2);
+  context.fillText(maxLabel, x + legendWidth - context.measureText(maxLabel).width, y + 20);
+  context.restore();
+}
+
+function drawLithosphereGrid() {
+  const grid = state.lithosphere?.grid;
+  if (!sceneLayerVisible("lithosphere") || state.lithosphere?.visible === false || !grid?.values?.length) return;
+  const opacity = Number(state.lithosphere.opacity ?? 72) / 100;
+  const dx = (grid.east - grid.west) / Math.max(1, grid.nx - 1);
+  const dy = (grid.north - grid.south) / Math.max(1, grid.ny - 1);
+  context.save();
+  context.globalAlpha = opacity;
+  for (let row = 0; row < grid.ny - 1; row++) {
+    const north = grid.north - row * dy;
+    const south = north - dy;
+    for (let column = 0; column < grid.nx - 1; column++) {
+      const value = grid.values[row * grid.nx + column];
+      if (!Number.isFinite(value)) continue;
+      const west = grid.west + column * dx;
+      const east = west + dx;
+      const a = worldToCanvas([west, north]);
+      const b = worldToCanvas([east, south]);
+      context.fillStyle = `rgb(${scalarRgb("lithosphere", value, grid.min, grid.max).join(",")})`;
+      context.fillRect(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(b[0] - a[0]) + .7, Math.abs(b[1] - a[1]) + .7);
+    }
+  }
+  context.restore();
+}
+
+function drawLithosphereLegend(width) {
+  const grid = state.lithosphere?.grid;
+  if (!sceneLayerVisible("legend") || !sceneLayerVisible("lithosphere") || !grid?.values?.length || viewMode === "section") return;
+  const legendWidth = Math.min(180, width - 40);
+  const x = 20; const y = state.tomography?.grid?.values?.length ? 104 : 44;
+  const gradient = context.createLinearGradient(x, 0, x + legendWidth, 0);
+  colorMapStops("lithosphere").forEach((color, index, colors) => gradient.addColorStop(index / Math.max(1, colors.length - 1), color));
+  context.save();
+  context.fillStyle = "rgba(5,10,13,.76)"; context.fillRect(x - 10, y - 24, legendWidth + 20, 48);
+  context.fillStyle = "#edf3f0"; context.font = "700 8px ui-monospace";
+  context.fillText(`${String(grid.model || "LOCAL").toUpperCase()} · ${String(grid.field).replaceAll("_", " ")}`, x, y - 11);
+  context.fillStyle = gradient; context.fillRect(x, y, legendWidth, 9);
+  context.strokeStyle = "#96a7ad"; context.strokeRect(x, y, legendWidth, 9);
+  context.font = "9px ui-monospace"; context.fillStyle = "#edf3f0";
+  context.fillText(Number(grid.min).toPrecision(4), x, y + 20);
+  const maxLabel = Number(grid.max).toPrecision(4);
   context.fillText(maxLabel, x + legendWidth - context.measureText(maxLabel).width, y + 20);
   context.restore();
 }
@@ -1844,7 +2163,7 @@ function drawPlanSlabProjection(feature) {
   gradient.addColorStop(.55, projectionColor(.3));
   gradient.addColorStop(1, projectionColor(.08));
   context.save();
-  context.fillStyle = gradient;
+  context.fillStyle = renderOptions.featureContoursOnly ? "rgba(0,0,0,0)" : gradient;
   context.strokeStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature), .8) : `${meta.color}aa`;
   context.lineWidth = featureIsSelected(feature.id) ? 2 : 1.25;
   context.beginPath();
@@ -1889,10 +2208,10 @@ function drawFeature(feature) {
   const points = traceFeature(feature);
   context.fillStyle = featureFill(feature, points, .28);
   context.strokeStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature)) : meta.color;
-  context.lineWidth = selected ? 3 : 2;
+  context.lineWidth = renderOptions.featureContoursOnly ? 2 : selected ? 3 : 2;
   context.fill();
   context.stroke();
-  if (state.appearance.renderMode === "temperature" && state.appearance.temperatureContours && FEATURE_TYPES[feature.model].geometry === "area") {
+  if (!renderOptions.featureContoursOnly && state.appearance.renderMode === "temperature" && state.appearance.temperatureContours && FEATURE_TYPES[feature.model].geometry === "area") {
     context.save();
     traceFeature(feature);
     context.clip();
@@ -1923,14 +2242,14 @@ function drawFeature(feature) {
     context.font = "700 10px Inter, sans-serif";
     if (sceneLayerVisible("labels")) context.fillText(`${feature.angle}° dip · ${(feature.thickness / 1000).toFixed(0)} km`, dip[0] + 10, dip[1] - 8);
   }
-  if (selected || tool === "connect") {
+  if (!renderOptions.suppressFeatureHandles && (selected || tool === "connect")) {
     points.forEach(([x, y], index) => {
       context.fillStyle = "#0b1115";
       context.beginPath(); context.arc(x, y, selected && index === selectedPointIndex ? 7 : 5, 0, Math.PI * 2); context.fill();
       context.lineWidth = selected && index === selectedPointIndex ? 3 : 2; context.stroke();
     });
   }
-  if (selected && feature.model === "plume") {
+  if (!renderOptions.suppressFeatureHandles && !renderOptions.featureVertexHandlesOnly && selected && feature.model === "plume") {
     const plume = plumePlanGeometry(feature);
     context.save();
     context.strokeStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature)) : meta.color;
@@ -1954,7 +2273,7 @@ function drawFeature(feature) {
     });
     context.restore();
   }
-  if (selected && feature.id === selectedId && feature.model !== "plume") {
+  if (!renderOptions.suppressFeatureHandles && !renderOptions.featureVertexHandlesOnly && selected && feature.id === selectedId && feature.model !== "plume") {
     const handle = thicknessHandleGeometry(feature);
     const thickness = featureThickness(feature);
     context.save();
@@ -2127,6 +2446,36 @@ function globeProject([longitude, latitude], depth = 0) {
   return [centerX + x * radiusPixels, centerY - y * radiusPixels];
 }
 
+function drawLithosphereGlobe() {
+  const grid = state.lithosphere?.grid;
+  if (!sceneLayerVisible("lithosphere") || state.lithosphere?.visible === false || !grid?.values?.length) return;
+  const columnStep = Math.max(1, Math.ceil(grid.nx / 60));
+  const rowStep = Math.max(1, Math.ceil(grid.ny / 45));
+  const dx = (grid.east - grid.west) / Math.max(1, grid.nx - 1);
+  const dy = (grid.north - grid.south) / Math.max(1, grid.ny - 1);
+  context.save();
+  context.globalAlpha = Number(state.lithosphere.opacity ?? 72) / 100;
+  for (let row = 0; row < grid.ny - 1; row += rowStep) {
+    const nextRow = Math.min(grid.ny - 1, row + rowStep);
+    const north = grid.north - row * dy;
+    const south = grid.north - nextRow * dy;
+    for (let column = 0; column < grid.nx - 1; column += columnStep) {
+      const value = grid.values[row * grid.nx + column];
+      if (!Number.isFinite(value)) continue;
+      const nextColumn = Math.min(grid.nx - 1, column + columnStep);
+      const west = grid.west + column * dx;
+      const east = grid.west + nextColumn * dx;
+      const points = [
+        globeProject([west, north]), globeProject([east, north]),
+        globeProject([east, south]), globeProject([west, south])
+      ];
+      context.fillStyle = `rgb(${scalarRgb("lithosphere", value, grid.min, grid.max).join(",")})`;
+      context.beginPath(); context.moveTo(...points[0]); points.slice(1).forEach(point => context.lineTo(...point)); context.closePath(); context.fill();
+    }
+  }
+  context.restore();
+}
+
 function drawTomographyGlobe() {
   const grid = state.tomography?.grid;
   if (!sceneLayerVisible("tomography") || state.tomography?.visible === false || !grid?.values?.length) return;
@@ -2161,12 +2510,17 @@ function drawTomographyGlobe() {
 
 function drawSpherical3DView(width, height) {
   const palette = canvasPalette();
+  const planetaryBody = state.settings.planetaryPresetActive
+    ? planetaryBodyById(state.settings.planetaryBody)
+    : null;
+  const planetaryVisual = PLANETARY_VISUALS[planetaryBody?.id] || PLANETARY_VISUALS.earth;
   context.fillStyle = palette.deep; context.fillRect(0, 0, width, height);
   const radiusPixels = Math.min(width, height) * .37;
   const centerX = width * .5; const centerY = height * .49;
   const glow = context.createRadialGradient(centerX - radiusPixels * .3, centerY - radiusPixels * .35, radiusPixels * .05, centerX, centerY, radiusPixels);
-  glow.addColorStop(0, state.appearance.theme === "light" ? "#ffffff" : "#1d3840");
-  glow.addColorStop(1, state.appearance.theme === "light" ? "#d8e2e5" : "#0b171c");
+  glow.addColorStop(0, planetaryBody ? planetaryVisual[0] : state.appearance.theme === "light" ? "#ffffff" : "#1d3840");
+  glow.addColorStop(.64, planetaryBody ? planetaryVisual[1] : state.appearance.theme === "light" ? "#e8f0f1" : "#132a32");
+  glow.addColorStop(1, planetaryBody ? planetaryVisual[2] : state.appearance.theme === "light" ? "#d8e2e5" : "#0b171c");
   context.fillStyle = glow; context.strokeStyle = palette.border; context.lineWidth = 1.5;
   context.beginPath(); context.arc(centerX, centerY, radiusPixels, 0, Math.PI * 2); context.fill(); context.stroke();
   context.save(); context.beginPath(); context.arc(centerX, centerY, radiusPixels, 0, Math.PI * 2); context.clip();
@@ -2189,6 +2543,7 @@ function drawSpherical3DView(width, height) {
       context.stroke();
     }
   }
+  drawLithosphereGlobe();
   drawTomographyGlobe();
   for (const feature of state.features.filter(featureVisible)) {
     const meta = FEATURE_TYPES[feature.model];
@@ -2200,12 +2555,32 @@ function drawSpherical3DView(width, height) {
     context.save();
     context.strokeStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature)) : meta.color;
     context.fillStyle = featureFill(feature, points, .34);
-    context.lineWidth = featureIsSelected(feature.id) ? 3 : 2;
+    context.lineWidth = renderOptions.featureContoursOnly ? 2 : featureIsSelected(feature.id) ? 3 : 2;
     context.beginPath(); context.moveTo(...points[0]); points.slice(1).forEach(point => context.lineTo(...point));
     if (meta.geometry === "area") context.closePath();
     context.fill(); context.stroke(); context.restore();
   }
   context.restore();
+  if (planetaryBody) {
+    const badgeWidth = Math.min(250, width - 36);
+    const badgeX = Math.max(18, width - badgeWidth - 18);
+    const badgeY = Math.max(18, height - 94);
+    context.save();
+    context.fillStyle = state.appearance.theme === "light" ? "rgba(255,255,255,.9)" : "rgba(5,12,16,.84)";
+    context.strokeStyle = palette.border;
+    context.lineWidth = 1;
+    context.beginPath();
+    context.roundRect(badgeX, badgeY, badgeWidth, 58, 9);
+    context.fill(); context.stroke();
+    context.fillStyle = palette.text;
+    context.font = "700 11px Inter, sans-serif";
+    context.fillText(`${planetaryBody.symbol} ${planetaryBody.name.toUpperCase()} · ACTIVE PRESET`, badgeX + 12, badgeY + 21);
+    context.fillStyle = palette.muted;
+    context.font = "9px ui-monospace";
+    context.fillText(`R ${(planetaryBody.radius / 1000).toLocaleString()} km · g ${planetaryBody.gravity} m/s²`, badgeX + 12, badgeY + 39);
+    context.fillText("Schematic body preview · datasets not yet loaded", badgeX + 12, badgeY + 52);
+    context.restore();
+  }
   context.fillStyle = palette.muted; context.font = "10px ui-monospace";
   context.fillText("SPHERICAL PREVIEW · longitude / latitude · depth exaggerated toward globe center", 18, height - 18);
 }
@@ -2280,12 +2655,12 @@ function draw3DView(width, height) {
     context.save();
     context.strokeStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature)) : meta.color;
     context.fillStyle = featureFill(feature, [...top, ...bottom], .26);
-    context.lineWidth = featureIsSelected(feature.id) ? 3 : 2;
+    context.lineWidth = renderOptions.featureContoursOnly ? 2 : featureIsSelected(feature.id) ? 3 : 2;
     if (meta.geometry === "area" && top.length > 2) {
       context.beginPath(); context.moveTo(...top[0]); top.slice(1).forEach(point => context.lineTo(...point)); context.closePath(); context.fill(); context.stroke();
       context.beginPath(); context.moveTo(...bottom[0]); bottom.slice(1).forEach(point => context.lineTo(...point)); context.closePath(); context.stroke();
       top.forEach((point, index) => { context.beginPath(); context.moveTo(...point); context.lineTo(...bottom[index]); context.stroke(); });
-      (feature.layers || []).map((layer, index) => ({ layer, index })).slice(0, -1)
+      if (!renderOptions.featureContoursOnly) (feature.layers || []).map((layer, index) => ({ layer, index })).slice(0, -1)
         .filter(item => featureSublayerVisible(feature, item.index))
         .forEach(({ layer, index: layerIndex }) => {
         const boundary = feature.points.map(point => project3D(point, Number(layer.maxDepth)));
@@ -2304,8 +2679,9 @@ function draw3DView(width, height) {
       continue;
     } else {
       const start = top[0]; const end = bottom[0];
-      context.lineWidth = feature.model === "plume" ? 18 : 4;
-      context.globalAlpha = .38; context.beginPath(); context.moveTo(...start); context.lineTo(...end); context.stroke();
+      context.lineWidth = renderOptions.featureContoursOnly ? 2 : feature.model === "plume" ? 18 : 4;
+      context.globalAlpha = renderOptions.featureContoursOnly ? 1 : .38;
+      context.beginPath(); context.moveTo(...start); context.lineTo(...end); context.stroke();
       context.globalAlpha = 1; context.lineWidth = 2; context.beginPath(); context.moveTo(...start); context.lineTo(...end); context.stroke();
     }
     context.globalAlpha = 1;
@@ -2347,8 +2723,8 @@ function drawGravitySectionProfile(width, pad, plotWidth) {
   const min = Math.min(...samples.map(sample => sample.value));
   const max = Math.max(...samples.map(sample => sample.value));
   const range = Math.max(1e-9, max - min);
-  const bandTop = pad.top + 7;
-  const bandHeight = Math.min(68, Math.max(34, (canvas.clientHeight - pad.top - pad.bottom) * .18));
+  const bandTop = 34;
+  const bandHeight = Math.max(48, Math.min(76, pad.top - bandTop - 14));
   context.save();
   context.fillStyle = state.appearance.theme === "light" ? "rgba(255,255,255,.82)" : "rgba(5,12,16,.82)";
   context.fillRect(pad.left, bandTop, plotWidth, bandHeight);
@@ -2363,7 +2739,7 @@ function drawGravitySectionProfile(width, pad, plotWidth) {
   context.stroke();
   context.fillStyle = state.appearance.theme === "light" ? "#342858" : "#d8d0ff";
   context.font = "600 8px ui-monospace";
-  context.fillText(`${gravity.field.toUpperCase()} · ${min.toFixed(2)} to ${max.toFixed(2)} ${result.unit}`, pad.left + 7, bandTop + 11);
+  context.fillText(`${gravityFieldLabel(gravity.field).toUpperCase()} · ${min.toFixed(2)} to ${max.toFixed(2)} ${result.unit}`, pad.left + 7, bandTop + 11);
   context.restore();
 }
 
@@ -2449,7 +2825,8 @@ function drawSectionTopographyProfile(section, metrics, pad, plotWidth) {
 function drawSectionProfile(width, height) {
   const palette = canvasPalette();
   context.fillStyle = palette.deep; context.fillRect(0, 0, width, height);
-  const pad = { left: 58, right: 24, top: 48, bottom: 44 };
+  const showGravityProfile = ensureGravity().enabled && sceneLayerVisible("gravity");
+  const pad = { left: 58, right: 24, top: showGravityProfile ? 128 : 48, bottom: 44 };
   const plotWidth = width - pad.left - pad.right;
   const plotHeight = height - pad.top - pad.bottom;
   const visibleFeatures = state.features.filter(featureVisible);
@@ -2477,7 +2854,7 @@ function drawSectionProfile(width, height) {
     const bottom = pad.top + (Math.min(feature.maxDepth, maxDepth) / maxDepth) * plotHeight;
     context.fillStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature), .42) : `${meta.color}45`;
     context.strokeStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature)) : meta.color;
-    context.lineWidth = featureIsSelected(feature.id) ? 3 : 2;
+    context.lineWidth = renderOptions.featureContoursOnly ? 2 : featureIsSelected(feature.id) ? 3 : 2;
     if (feature.model === "subducting plate" || feature.model === "fault") {
       const segments = feature.raw?.segments?.length ? feature.raw.segments : [{
         length: feature.segmentLength,
@@ -2494,14 +2871,16 @@ function drawSectionProfile(width, height) {
         const drop = (length * Math.sin(angle * Math.PI / 180) / maxDepth) * plotHeight;
         const nextX = Math.min(width - pad.right, currentX + run);
         const nextY = Math.min(pad.top + plotHeight, currentY + drop);
-        context.save();
-        context.globalAlpha = .18;
         const bandWidth = Math.max(7, (thickness / maxDepth) * plotHeight);
-        context.lineWidth = bandWidth;
-        context.beginPath(); context.moveTo(currentX, currentY); context.lineTo(nextX, nextY); context.stroke();
-        context.restore();
+        if (!renderOptions.featureContoursOnly) {
+          context.save();
+          context.globalAlpha = .18;
+          context.lineWidth = bandWidth;
+          context.beginPath(); context.moveTo(currentX, currentY); context.lineTo(nextX, nextY); context.stroke();
+          context.restore();
+        }
         const segmentLayers = feature.layers || [];
-        if (segmentLayers.length > 1) {
+        if (!renderOptions.featureContoursOnly && segmentLayers.length > 1) {
           const dx = nextX - currentX; const dy = nextY - currentY;
           const lengthPixels = Math.max(1, Math.hypot(dx, dy));
           const normal = [-dy / lengthPixels, dx / lengthPixels];
@@ -2520,7 +2899,7 @@ function drawSectionProfile(width, height) {
             context.restore();
             });
         }
-    context.lineWidth = featureIsSelected(feature.id) ? 3 : 2;
+        context.lineWidth = renderOptions.featureContoursOnly ? 2 : featureIsSelected(feature.id) ? 3 : 2;
         context.beginPath(); context.moveTo(currentX, currentY); context.lineTo(nextX, nextY); context.stroke();
         context.fillStyle = meta.color; context.font = "700 9px Inter, sans-serif";
         context.fillText(`S${segmentIndex + 1} · ${angle}°`, (currentX + nextX) / 2 + 4, (currentY + nextY) / 2 - 5);
@@ -2528,7 +2907,7 @@ function drawSectionProfile(width, height) {
       });
     } else {
       const halfWidth = meta.geometry === "point" ? 10 : 30;
-      if (feature.layers?.length) {
+      if (!renderOptions.featureContoursOnly && feature.layers?.length) {
         feature.layers.forEach((layer, layerIndex) => {
           if (!featureSublayerVisible(feature, layerIndex)) return;
           const layerTop = pad.top + (Number(layer.minDepth) / maxDepth) * plotHeight;
@@ -2538,7 +2917,7 @@ function drawSectionProfile(width, height) {
             : `hsla(${172 + layerIndex * 31}, 48%, 52%, .32)`;
           context.fillRect(x - halfWidth, layerTop, halfWidth * 2, Math.max(2, layerBottom - layerTop));
         });
-      } else {
+      } else if (!renderOptions.featureContoursOnly) {
         context.fillRect(x - halfWidth, top, halfWidth * 2, Math.max(5, bottom - top));
       }
       context.strokeStyle = meta.color;
@@ -2600,6 +2979,8 @@ function drawOne() {
   drawTopographyLegend(width, height);
   drawTemperatureLegend(width, height);
   drawTomographyLegend(width, height);
+  drawLithosphereLegend(width);
+  drawGravityLegend(width);
 }
 
 function renderViewport(name, targetCanvas, targetContext) {
@@ -2632,24 +3013,140 @@ function resizeStandaloneCanvas(target) {
   return targetContext;
 }
 
-function renderStandaloneCanvas(target, mode) {
+function renderStandaloneCanvas(target, mode, options = {}) {
   const targetContext = resizeStandaloneCanvas(target);
   if (!targetContext) return;
-  const previous = { canvas, context, viewMode, renderCamera };
+  const previous = { canvas, context, viewMode, renderCamera, renderOptions };
   canvas = target;
   context = targetContext;
   viewMode = mode;
   renderCamera = viewportCameras.primary;
+  renderOptions = {
+    featureContoursOnly: false,
+    suppressFeatureHandles: false,
+    featureVertexHandlesOnly: false,
+    suppressGravityLegend: false,
+    ...options
+  };
   drawOne();
-  ({ canvas, context, viewMode, renderCamera } = previous);
+  ({ canvas, context, viewMode, renderCamera, renderOptions } = previous);
 }
 
 function renderGravityWorkspace() {
   const dialog = document.querySelector("#gravity-workspace");
   if (!dialog?.open) return;
-  renderStandaloneCanvas(gravityMapCanvas, "plan");
-  renderStandaloneCanvas(gravity3DCanvas, "three-d");
-  renderStandaloneCanvas(gravitySectionCanvas, "section");
+  const editingContours = Boolean(state.ui.gravityWorkspaceContourEditing);
+  const workspaceOptions = {
+    featureContoursOnly: Boolean(state.ui.gravityWorkspaceContoursOnly),
+    suppressFeatureHandles: Boolean(state.ui.gravityWorkspaceContoursOnly) && !editingContours,
+    featureVertexHandlesOnly: editingContours
+  };
+  renderStandaloneCanvas(gravityMapCanvas, "plan", workspaceOptions);
+  renderStandaloneCanvas(gravity3DCanvas, "three-d", workspaceOptions);
+  renderStandaloneCanvas(gravitySectionCanvas, "section", { ...workspaceOptions, suppressGravityLegend: true });
+}
+
+function syncWorkspaceDock() {
+  const dock = document.querySelector("#workspace-dock");
+  const minimized = Boolean(state.ui?.gravityWorkspaceMinimized);
+  dock.classList.toggle("hidden", !minimized);
+  dock.setAttribute("aria-hidden", String(!minimized));
+}
+
+function syncGravityWorkspaceControls() {
+  const contourButton = document.querySelector("#toggle-gravity-feature-contours");
+  if (!contourButton) return;
+  const contours = Boolean(state.ui.gravityWorkspaceContoursOnly);
+  contourButton.classList.toggle("active", contours);
+  contourButton.setAttribute("aria-pressed", String(contours));
+  contourButton.textContent = contours ? "◎ Contours only · On" : "◎ Contours only";
+  const sectionButton = document.querySelector("#gravity-draw-section");
+  const sectionPicking = Boolean(state.ui.gravityWorkspaceSectionPicking);
+  sectionButton.classList.toggle("active", sectionPicking);
+  sectionButton.setAttribute("aria-pressed", String(sectionPicking));
+  sectionButton.textContent = sectionPicking
+    ? `✓ Finish section · ${sectionDraft.length} point${sectionDraft.length === 1 ? "" : "s"}`
+    : "⌁ Draw section";
+  const editButton = document.querySelector("#gravity-edit-contours");
+  const editing = Boolean(state.ui.gravityWorkspaceContourEditing);
+  editButton.classList.toggle("active", editing);
+  editButton.setAttribute("aria-pressed", String(editing));
+  editButton.textContent = editing ? "◇ Edit contours · On" : "◇ Edit contours";
+  const gravity = ensureGravity();
+  document.querySelector("#gravity-workspace-field").value = gravity.field;
+  const fieldLabel = gravityFieldLabel(gravity.field);
+  document.querySelector("#gravity-map-pane-title").textContent = sectionPicking
+    ? `Click map to trace section · ${sectionDraft.length} point${sectionDraft.length === 1 ? "" : "s"}`
+    : editing ? `Drag feature vertices · ${fieldLabel}` : `Map · ${fieldLabel}`;
+  document.querySelector("#gravity-section-pane-title").textContent =
+    `Section · ${fieldLabel} profile above density structure`;
+  gravityMapCanvas.style.cursor = sectionPicking || editing ? "crosshair" : "move";
+}
+
+function openGravityWorkspace({ recompute = false } = {}) {
+  const gravity = ensureGravity();
+  gravity.enabled = true;
+  state.sceneLayers.gravity = true;
+  state.sceneLayers.legend = true;
+  if (recompute) {
+    gravity.signature = null;
+    computeGravityPreview(true);
+  }
+  state.ui.gravityWorkspaceMinimized = false;
+  const layout = state.ui.gravityWorkspaceLayout || "triple";
+  document.querySelector("#gravity-workspace-layout").value = layout;
+  document.querySelector("#gravity-workspace-grid").dataset.layout = layout;
+  syncGravityWorkspaceControls();
+  syncGravityUI();
+  syncWorkspaceDock();
+  persist();
+  const dialog = document.querySelector("#gravity-workspace");
+  if (!dialog.open) dialog.showModal();
+  requestAnimationFrame(renderGravityWorkspace);
+}
+
+function minimizeGravityWorkspace() {
+  const dialog = document.querySelector("#gravity-workspace");
+  state.ui.gravityWorkspaceMinimized = true;
+  state.ui.gravityWorkspaceLayout = document.querySelector("#gravity-workspace-grid").dataset.layout || "triple";
+  if (dialog.open) dialog.close();
+  syncWorkspaceDock();
+  persist();
+  showToast("Gravity workspace minimized · results preserved");
+}
+
+function gravityWorkspaceMapPoint(target, event) {
+  const previous = { canvas, context, viewMode, renderCamera };
+  canvas = target;
+  context = target.getContext("2d");
+  viewMode = "plan";
+  renderCamera = viewportCameras.primary;
+  const rect = target.getBoundingClientRect();
+  const canvasPoint = screenPointToCanvas(event.clientX - rect.left, event.clientY - rect.top);
+  const worldPoint = canvasToWorld(...canvasPoint);
+  ({ canvas, context, viewMode, renderCamera } = previous);
+  return { canvasPoint, worldPoint };
+}
+
+function gravityWorkspaceFeatureHit(target, event) {
+  const previous = { canvas, context, viewMode, renderCamera };
+  canvas = target;
+  context = target.getContext("2d");
+  viewMode = "plan";
+  renderCamera = viewportCameras.primary;
+  const rect = target.getBoundingClientRect();
+  const point = screenPointToCanvas(event.clientX - rect.left, event.clientY - rect.top);
+  let nearest = null;
+  state.features.filter(featureVisible).forEach(feature => {
+    feature.points.forEach((worldPoint, vertexIndex) => {
+      const projected = worldToCanvas(worldPoint);
+      const distance = Math.hypot(projected[0] - point[0], projected[1] - point[1]);
+      if (!nearest || distance < nearest.distance) nearest = { feature, vertexIndex, distance };
+    });
+  });
+  const feature = hitFeature(point);
+  ({ canvas, context, viewMode, renderCamera } = previous);
+  return { nearest: nearest?.distance <= 15 ? nearest : null, feature };
 }
 
 function bindGravityWorkspaceCanvas(target, mode) {
@@ -2659,11 +3156,65 @@ function bindGravityWorkspaceCanvas(target, mode) {
     renderGravityWorkspace();
   }, { passive: false });
   target.addEventListener("pointerdown", event => {
+    if (mode === "plan" && event.button === 0 && !event.shiftKey && state.ui.gravityWorkspaceSectionPicking) {
+      event.preventDefault();
+      const { worldPoint } = gravityWorkspaceMapPoint(target, event);
+      const precision = state.settings.coordinateSystem === "spherical" ? 1e5 : 1;
+      sectionDraft.push(worldPoint.map(value => Math.round(value * precision) / precision));
+      if (sectionDraft.length >= 2) state.sectionPath = sectionDraft.map(point => [...point]);
+      syncGravityWorkspaceControls();
+      persist();
+      draw();
+      renderGravityWorkspace();
+      return;
+    }
+    if (mode === "plan" && event.button === 0 && !event.shiftKey && state.ui.gravityWorkspaceContourEditing) {
+      event.preventDefault();
+      const { nearest, feature } = gravityWorkspaceFeatureHit(target, event);
+      const targetFeature = nearest?.feature || feature;
+      if (targetFeature) {
+        selectedId = targetFeature.id;
+        selectedIds = new Set([targetFeature.id]);
+        renderInspector();
+        renderNavigator();
+      }
+      if (nearest) {
+        commitHistory();
+        gravityWorkspaceGeometryDrag = {
+          target,
+          pointerId: event.pointerId,
+          featureId: nearest.feature.id,
+          vertexIndex: nearest.vertexIndex,
+          lastCompute: 0
+        };
+        target.setPointerCapture(event.pointerId);
+        target.style.cursor = "crosshair";
+      }
+      renderGravityWorkspace();
+      return;
+    }
     gravityWorkspaceDrag = { target, mode, x: event.clientX, y: event.clientY };
     target.setPointerCapture(event.pointerId);
     target.style.cursor = "grabbing";
   });
   target.addEventListener("pointermove", event => {
+    if (gravityWorkspaceGeometryDrag?.target === target) {
+      const feature = state.features.find(item => item.id === gravityWorkspaceGeometryDrag.featureId);
+      if (!feature) return;
+      const { worldPoint } = gravityWorkspaceMapPoint(target, event);
+      feature.points[gravityWorkspaceGeometryDrag.vertexIndex] = worldPoint;
+      feature.geometryEdited = true;
+      const gravity = ensureGravity();
+      gravity.signature = null;
+      const now = performance.now();
+      if (now - gravityWorkspaceGeometryDrag.lastCompute > 80) {
+        gravityWorkspaceGeometryDrag.lastCompute = now;
+        computeGravityPreview(true);
+      }
+      draw();
+      renderGravityWorkspace();
+      return;
+    }
     if (!gravityWorkspaceDrag || gravityWorkspaceDrag.target !== target) return;
     const dx = event.clientX - gravityWorkspaceDrag.x;
     const dy = event.clientY - gravityWorkspaceDrag.y;
@@ -2678,12 +3229,23 @@ function bindGravityWorkspaceCanvas(target, mode) {
     renderGravityWorkspace();
   });
   const finish = () => {
+    if (gravityWorkspaceGeometryDrag?.target === target) {
+      gravityWorkspaceGeometryDrag = null;
+      computeGravityPreview(true);
+      updateAll();
+      syncGravityUI();
+      target.style.cursor = "crosshair";
+      showToast("Feature contour updated · gravity recomputed");
+      return;
+    }
     gravityWorkspaceDrag = null;
-    target.style.cursor = mode === "three-d" ? "grab" : "move";
+    target.style.cursor = mode === "three-d" ? "grab"
+      : state.ui.gravityWorkspaceSectionPicking || state.ui.gravityWorkspaceContourEditing ? "crosshair" : "move";
   };
   target.addEventListener("pointerup", finish);
   target.addEventListener("pointercancel", finish);
-  target.style.cursor = mode === "three-d" ? "grab" : "move";
+  target.style.cursor = mode === "three-d" ? "grab"
+    : state.ui.gravityWorkspaceSectionPicking || state.ui.gravityWorkspaceContourEditing ? "crosshair" : "move";
 }
 
 function hitFeature(point) {
@@ -3338,6 +3900,7 @@ function syncSettingsForm() {
   Object.entries(labels).forEach(([id, text]) => { document.querySelector(`#${id}`).textContent = text; });
   document.querySelector("#coordinate-readout").textContent = spherical ? "lon 0.00° · lat 0.00°" : "x 0 km · y 0 km";
   updateGridSummary();
+  syncGeographicBoundsUI();
   if (state.background) syncMapEditor();
 }
 
@@ -3363,8 +3926,10 @@ function loadWorld(world, grid = "") {
   const sceneLayers = { ...DEFAULT_SCENE_LAYERS, ...(state.sceneLayers || {}) };
   const gravity = { ...DEFAULT_GRAVITY, ...(state.gravity || {}), result: null, signature: null };
   const tomography = { ...DEFAULT_TOMOGRAPHY, ...(state.tomography || {}) };
+  const lithosphere = { ...DEFAULT_LITHOSPHERE, ...(state.lithosphere || {}) };
   const provenance = {
-    tomographyModelIds: Array.isArray(state.provenance?.tomographyModelIds) ? [...state.provenance.tomographyModelIds] : []
+    tomographyModelIds: Array.isArray(state.provenance?.tomographyModelIds) ? [...state.provenance.tomographyModelIds] : [],
+    lithosphereModelIds: Array.isArray(state.provenance?.lithosphereModelIds) ? [...state.provenance.lithosphereModelIds] : []
   };
   const exportOptions = { ...DEFAULT_EXPORT_OPTIONS, ...(state.exportOptions || {}) };
   const colorMaps = structuredClone(ensureColorMaps());
@@ -3376,6 +3941,7 @@ function loadWorld(world, grid = "") {
   state.sceneLayers = sceneLayers;
   state.gravity = gravity;
   state.tomography = tomography;
+  state.lithosphere = lithosphere;
   state.provenance = provenance;
   state.exportOptions = exportOptions;
   state.colorMaps = colorMaps;
@@ -3420,7 +3986,7 @@ function renderExamples() {
 
 async function loadExampleCatalog() {
   try {
-    const response = await fetch("./examples/catalog.json");
+    const response = await fetchWithProgress("./examples/catalog.json", {}, "Loading GWB example library");
     examples = await response.json();
     const categories = [...new Set(examples.map(example => example.category))];
     document.querySelector("#example-category").innerHTML = `<option value="all">All collections</option>${categories.map(category => `<option value="${category}">${category}</option>`).join("")}`;
@@ -3439,11 +4005,32 @@ function selectedTomographyReferences() {
   return [...ids].map(tomographyModelById).filter(Boolean);
 }
 
+function selectedLithosphereReferences() {
+  const ids = new Set(state.provenance?.lithosphereModelIds || []);
+  if (state.lithosphere?.grid?.sourceModelId) ids.add(state.lithosphere.grid.sourceModelId);
+  return [...ids].map(lithosphereModelById).filter(Boolean);
+}
+
+function selectedPlanetaryReference() {
+  const body = planetaryBodyById(state.settings.planetaryBody);
+  if (!body) return [];
+  return [{
+    name: `${body.name} planetary constants and data catalog`,
+    citation: `${body.name} body preset · constants compiled from NASA/NSSDCA and dataset links from NASA PDS/USGS Astrogeology`,
+    citationUrl: "https://nssdc.gsfc.nasa.gov/planetary/factsheet/",
+    sourceUrl: body.data[0]?.[1]
+  }];
+}
+
 function buildWbText() {
   const world = buildWorldBuilder(state.settings, featuresWithTopography(), state.rawWorld);
   const notes = [
     `${state.settings.coordinateSystem === "spherical" ? "Spherical chunk" : "Cartesian"} model with ${state.features.length} feature${state.features.length === 1 ? "" : "s"}.`
   ];
+  const planetaryBody = planetaryBodyById(state.settings.planetaryBody);
+  if (planetaryBody) {
+    notes.push(`${planetaryBody.name} preset: radius ${(planetaryBody.radius / 1000).toFixed(1)} km and uniform gravity ${planetaryBody.gravity} m/s². Thermal values are editable modelling assumptions.`);
+  }
   if (state.tomography?.grid) {
     notes.push(`Tomography overlay: ${state.tomography.grid.model} at ${state.tomography.grid.depth} km (${state.tomography.scalarField}).`);
   } else if (state.tomography?.sourceMode === "image-fallback") {
@@ -3452,9 +4039,12 @@ function buildWbText() {
   if (state.features.some(feature => feature.tomographySource)) {
     notes.push("One or more feature geometries were interpreted from a tomography iso-region; inspect each feature before simulation.");
   }
+  if (state.lithosphere?.grid) {
+    notes.push(`Lithosphere overlay: ${state.lithosphere.grid.model}, field ${state.lithosphere.grid.field}; the preview grid is drawing context and is not embedded in this .wb file.`);
+  }
   return serializeWorldBuilder(world, {
     notes,
-    references: selectedTomographyReferences()
+    references: [...selectedTomographyReferences(), ...selectedLithosphereReferences(), ...selectedPlanetaryReference()]
   }, {
     includeComments: state.exportOptions?.comments !== false,
     includeReferences: state.exportOptions?.references !== false
@@ -3485,7 +4075,8 @@ function updateAll(rerenderInspector = true) {
   const hasDrawingContext = Object.values(state.paleogeography?.layers || {})
     .some(collection => collection?.features?.length)
     || Boolean(state.topography?.imageSrc)
-    || state.topography?.values?.length === state.topography?.width * state.topography?.height;
+    || state.topography?.values?.length === state.topography?.width * state.topography?.height
+    || Boolean(state.settings.planetaryPresetActive);
   document.querySelector("#empty-state").classList.toggle("hidden", state.features.length > 0 || hasDrawingContext);
   updateSelectionCount();
   const coordinateScale = state.settings.coordinateSystem === "spherical" ? 1 : 1000;
@@ -3501,20 +4092,115 @@ function updateAll(rerenderInspector = true) {
 }
 
 function download(name, content, type) {
+  const activity = startActivity(`Preparing ${name}`);
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([content], { type }));
   link.download = name;
   link.click();
   URL.revokeObjectURL(link.href);
+  requestAnimationFrame(() => finishActivity(activity, `${name} download started`, "success"));
 }
 
 function downloadBlob(name, blob) {
+  const activity = startActivity(`Preparing ${name}`);
   const link = document.createElement("a");
   const url = URL.createObjectURL(blob);
   link.href = url;
   link.download = name;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  requestAnimationFrame(() => finishActivity(activity, `${name} download started`, "success"));
+}
+
+function formatBytes(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 ** 2).toFixed(1)} MB`;
+}
+
+function startActivity(label, total = 0) {
+  const token = ++activitySequence;
+  clearTimeout(activityHideTimer);
+  const panel = document.querySelector("#activity-progress");
+  panel.classList.remove("hidden", "success", "error");
+  panel.classList.toggle("indeterminate", !(total > 0));
+  document.querySelector("#activity-progress-label").textContent = label;
+  document.querySelector("#activity-progress-percent").textContent = total > 0 ? "0%" : "";
+  document.querySelector("#activity-progress-fill").style.width = total > 0 ? "0%" : "";
+  return token;
+}
+
+function updateActivity(token, loaded, total = 0, label = "") {
+  if (token !== activitySequence) return;
+  const panel = document.querySelector("#activity-progress");
+  if (label) document.querySelector("#activity-progress-label").textContent = label;
+  if (total > 0) {
+    const percent = Math.min(100, Math.round(loaded / total * 100));
+    panel.classList.remove("indeterminate");
+    document.querySelector("#activity-progress-percent").textContent = `${percent}% · ${formatBytes(loaded)} / ${formatBytes(total)}`;
+    document.querySelector("#activity-progress-fill").style.width = `${percent}%`;
+  } else {
+    panel.classList.add("indeterminate");
+    document.querySelector("#activity-progress-percent").textContent = loaded ? formatBytes(loaded) : "";
+  }
+}
+
+function finishActivity(token, label, kind = "success") {
+  if (token !== activitySequence) return;
+  const panel = document.querySelector("#activity-progress");
+  panel.classList.remove("indeterminate");
+  panel.classList.add(kind);
+  document.querySelector("#activity-progress-label").textContent = label;
+  document.querySelector("#activity-progress-percent").textContent = kind === "success" ? "Done" : "Failed";
+  document.querySelector("#activity-progress-fill").style.width = "100%";
+  activityHideTimer = setTimeout(() => panel.classList.add("hidden"), kind === "success" ? 1100 : 2600);
+}
+
+async function fetchWithProgress(input, init = {}, label = "Loading data") {
+  const activity = startActivity(label);
+  try {
+    const response = await fetch(input, init);
+    if (!response.body) {
+      finishActivity(activity, response.ok ? `${label} complete` : `${label} failed`, response.ok ? "success" : "error");
+      return response;
+    }
+    const total = Number(response.headers.get("content-length")) || 0;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.byteLength;
+      updateActivity(activity, loaded, total, label);
+    }
+    finishActivity(activity, response.ok ? `${label} complete` : `${label} failed`, response.ok ? "success" : "error");
+    return new Response(new Blob(chunks), {
+      status: response.status, statusText: response.statusText, headers: response.headers
+    });
+  } catch (error) {
+    finishActivity(activity, error.name === "AbortError" ? `${label} cancelled` : `${label} failed`, "error");
+    throw error;
+  }
+}
+
+function readFileWithProgress(file, label = `Opening ${file.name}`) {
+  const activity = startActivity(label, file.size);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onprogress = event => updateActivity(activity, event.loaded, event.lengthComputable ? event.total : file.size, label);
+    reader.onload = () => {
+      finishActivity(activity, `${file.name} opened`, "success");
+      resolve(String(reader.result));
+    };
+    reader.onerror = () => {
+      finishActivity(activity, `${file.name} could not be opened`, "error");
+      reject(reader.error || new Error("File reading failed."));
+    };
+    reader.readAsText(file);
+  });
 }
 
 function screenshotName(prefix) {
@@ -3648,7 +4334,9 @@ async function runResearchSearch() {
   summary.textContent = "Searching the local GWB knowledge index…";
   summary.className = "tomography-status loading";
   try {
-    const response = await fetch(`/api/research/search?${new URLSearchParams({ q: query, scope })}`);
+    const response = await fetchWithProgress(
+      `/api/research/search?${new URLSearchParams({ q: query, scope })}`, {}, "Searching GWB documentation"
+    );
     if (!response.ok) throw new Error(await response.text());
     renderResearchResults(await response.json());
   } catch (error) {
@@ -3756,6 +4444,213 @@ function renderTomographyCatalog() {
     renderTomographyCatalog();
     renderOutput();
   }));
+}
+
+function setLithosphereStatus(message, kind = "") {
+  const status = document.querySelector("#lithosphere-status");
+  status.textContent = message;
+  status.className = `tomography-status ${kind}`.trim();
+}
+
+function selectLithosphereReference(modelId) {
+  const model = lithosphereModelById(modelId);
+  if (!model) return;
+  state.provenance ||= { tomographyModelIds: [], lithosphereModelIds: [] };
+  state.provenance.lithosphereModelIds ||= [];
+  if (!state.provenance.lithosphereModelIds.includes(modelId)) state.provenance.lithosphereModelIds.push(modelId);
+  state.lithosphere = { ...DEFAULT_LITHOSPHERE, ...(state.lithosphere || {}), selectedModelId: modelId };
+  setLithosphereStatus(`${model.name} selected · download its original data, then open a geographic CSV/TXT surface below.`, "success");
+  persist();
+  renderLithosphereCatalog();
+  renderOutput();
+}
+
+function renderLithosphereCatalog() {
+  const list = document.querySelector("#lithosphere-catalog-list");
+  if (!list) return;
+  const query = document.querySelector("#lithosphere-catalog-search")?.value || "";
+  const provider = document.querySelector("#lithosphere-catalog-provider")?.value || "all";
+  const models = searchLithosphereModels(query, provider);
+  const references = new Set(state.provenance?.lithosphereModelIds || []);
+  document.querySelector("#lithosphere-catalog-count").textContent = `${models.length}/${LITHOSPHERE_CATALOG.length}`;
+  list.innerHTML = models.length ? models.map(model => `
+    <article class="tomography-model-card ${references.has(model.id) ? "selected-reference" : ""}" data-lithosphere-model-id="${model.id}">
+      <header>
+        <div><strong>${escapeHtml(model.name)}</strong><small>${escapeHtml(model.provider)}</small></div>
+        <span class="catalog-status ${model.availability}">${escapeHtml(model.availabilityLabel)}</span>
+      </header>
+      <p>${escapeHtml(model.summary)}</p>
+      <div class="catalog-meta">${escapeHtml(model.coverage)}</div>
+      <div class="catalog-meta">${escapeHtml(model.fields.join(", "))}</div>
+      <div class="catalog-meta">${escapeHtml(model.formats.join(" · "))}</div>
+      <div class="catalog-actions">
+        <button data-lithosphere-select="${model.id}" class="${references.has(model.id) ? "active" : ""}">${references.has(model.id) ? "Source selected ✓" : "Use source"}</button>
+        <a href="${model.downloadUrl || model.sourceUrl}" target="_blank" rel="noreferrer">Data ↗</a>
+        <a href="${model.citationUrl}" target="_blank" rel="noreferrer">Paper ↗</a>
+      </div>
+    </article>`).join("") : `<p class="shape-help">No lithosphere models match this search.</p>`;
+  list.querySelectorAll("[data-lithosphere-select]").forEach(button => button.addEventListener("click", () => {
+    selectLithosphereReference(button.dataset.lithosphereSelect);
+  }));
+}
+
+function syncLithosphereUI() {
+  state.lithosphere = { ...DEFAULT_LITHOSPHERE, ...(state.lithosphere || {}) };
+  document.querySelector("#lithosphere-opacity").value = state.lithosphere.opacity;
+  document.querySelector("#clear-lithosphere").disabled = !state.lithosphere.grid;
+  renderLithosphereCatalog();
+}
+
+function renderPlanetaryCatalog() {
+  const list = document.querySelector("#planetary-catalog-list");
+  if (!list) return;
+  const query = document.querySelector("#planetary-catalog-search")?.value || "";
+  const family = document.querySelector("#planetary-catalog-family")?.value || "all";
+  const bodies = searchPlanetaryBodies(query, family);
+  document.querySelector("#planetary-catalog-count").textContent = `${bodies.length}/${PLANETARY_BODY_CATALOG.length}`;
+  list.innerHTML = bodies.length ? bodies.map(body => `
+    <article class="tomography-model-card planetary-card ${state.settings.planetaryBody === body.id ? "selected-reference" : ""}">
+      <header>
+        <div><strong><span class="planet-symbol">${body.symbol}</span>${escapeHtml(body.name)}</strong><small>${escapeHtml(body.family)}</small></div>
+        <span class="catalog-status ${state.settings.planetaryBody === body.id ? "numerical" : "download"}">${state.settings.planetaryBody === body.id ? "Active body" : "Preset"}</span>
+      </header>
+      <p>${escapeHtml(body.summary)}</p>
+      <div class="planetary-constants">
+        <span><small>Radius</small><strong>${(body.radius / 1000).toLocaleString()} km</strong></span>
+        <span><small>Gravity</small><strong>${body.gravity} m/s²</strong></span>
+        <span><small>Surface</small><strong>${body.surfaceTemperature} K</strong></span>
+        <span><small>Model depth</small><strong>${body.modelDepth / 1000} km</strong></span>
+      </div>
+      <div class="catalog-meta">${escapeHtml(body.fields.join(" · "))}</div>
+      <div class="catalog-actions">
+        <button data-planet-apply="${body.id}" class="${state.settings.planetaryBody === body.id ? "active" : ""}">${state.settings.planetaryBody === body.id ? "Applied ✓" : "Use body preset"}</button>
+        ${body.data.map(([label, url]) => `<a href="${url}" target="_blank" rel="noreferrer">${escapeHtml(label)} ↗</a>`).join("")}
+      </div>
+    </article>`).join("") : `<p class="shape-help">No planetary bodies match this search.</p>`;
+  list.querySelectorAll("[data-planet-apply]").forEach(button => button.addEventListener("click", () => applyPlanetaryBody(button.dataset.planetApply)));
+}
+
+function applyPlanetaryBody(bodyId) {
+  const body = planetaryBodyById(bodyId);
+  if (!body) return;
+  Object.assign(state.settings, {
+    planetaryBody: body.id,
+    planetaryPresetActive: true,
+    coordinateSystem: "spherical",
+    gridType: "chunk",
+    dimension: 3,
+    radius: body.radius,
+    gravityMagnitude: body.gravity,
+    surfaceTemperature: body.surfaceTemperature,
+    mantleTemperature: body.mantleTemperature,
+    backgroundDensity: body.backgroundDensity,
+    zMin: 0,
+    zMax: Math.min(body.modelDepth, body.radius * .9),
+    xMin: -180,
+    xMax: 180,
+    yMin: -90,
+    yMax: 90,
+    cellsX: Math.max(72, Number(state.settings.cellsX) || 72),
+    cellsY: Math.max(36, Number(state.settings.cellsY) || 36)
+  });
+  if (body.id !== "earth") {
+    state.sceneLayers = {
+      ...DEFAULT_SCENE_LAYERS,
+      ...(state.sceneLayers || {}),
+      topography: false,
+      paleogeography: false,
+      referenceMap: false,
+      tomography: false,
+      lithosphere: false,
+      gravity: false
+    };
+    state.tomography = { ...DEFAULT_TOMOGRAPHY, ...(state.tomography || {}), visible: false };
+    state.lithosphere = { ...DEFAULT_LITHOSPHERE, ...(state.lithosphere || {}), visible: false };
+    state.paleogeography = { ...DEFAULT_PALEOGEOGRAPHY, ...(state.paleogeography || {}), visible: false };
+  }
+  viewportModes[activeViewport] = "three-d";
+  viewMode = "three-d";
+  Object.assign(viewportCameras[activeViewport], {
+    zoom: 1, rotation: 0, panX: 0, panY: 0, orbitYaw: -25, orbitPitch: 28
+  });
+  if (activeViewport === "secondary") {
+    state.ui.secondaryView = "three-d";
+    state.ui.secondaryCamera = { ...viewportCameras.secondary };
+  } else {
+    Object.assign(state.appearance, {
+      viewZoom: 1, viewRotation: 0, viewPanX: 0, viewPanY: 0, orbitYaw: -25, orbitPitch: 28
+    });
+  }
+  state.gravity = { ...DEFAULT_GRAVITY, ...(state.gravity || {}), referenceDensity: body.backgroundDensity, result: null, signature: null };
+  syncSettingsForm();
+  updateTopographyUI();
+  syncGravityUI();
+  document.querySelectorAll("[data-view]").forEach(item => item.classList.toggle("active", item.dataset.view === "three-d"));
+  updateViewportLabels();
+  updateCameraUI();
+  updateAll(false);
+  renderPlanetaryCatalog();
+  showToast(`${body.name} spherical preset applied${body.id === "earth" ? "" : " · Earth overlays hidden"}`);
+}
+
+function installLithosphereTable(table, sourceName) {
+  lithosphereTable = table;
+  if (state.settings.coordinateSystem !== "spherical") {
+    const longitudes = table.rows.map(row => row[table.longitudeIndex]);
+    const latitudes = table.rows.map(row => row[table.latitudeIndex]);
+    const tableBounds = {
+      west: Math.min(...longitudes), east: Math.max(...longitudes),
+      south: Math.min(...latitudes), north: Math.max(...latitudes)
+    };
+    const configured = geographicSourceBounds();
+    const overlaps = configured.west < tableBounds.east && configured.east > tableBounds.west
+      && configured.south < tableBounds.north && configured.north > tableBounds.south;
+    if (!overlaps) {
+      Object.assign(state.settings, {
+        geographicSourceWest: tableBounds.west,
+        geographicSourceEast: tableBounds.east,
+        geographicSourceSouth: tableBounds.south,
+        geographicSourceNorth: tableBounds.north
+      });
+      syncGeographicBoundsUI();
+    }
+  }
+  state.lithosphere = { ...DEFAULT_LITHOSPHERE, ...(state.lithosphere || {}), sourceName };
+  const field = document.querySelector("#lithosphere-field");
+  field.innerHTML = table.fields.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name.replaceAll("_", " "))}</option>`).join("");
+  field.disabled = false;
+  document.querySelector("#apply-lithosphere-field").disabled = false;
+  document.querySelector("#lithosphere-file-name").textContent = `${sourceName} · ${table.rows.length.toLocaleString()} samples`;
+  setLithosphereStatus(`${table.fields.length} numerical field${table.fields.length === 1 ? "" : "s"} found. Choose one to preview.`, "success");
+  applyLithosphereField();
+}
+
+function applyLithosphereField() {
+  if (!lithosphereTable) return showToast("Open a geographic table first");
+  try {
+    const field = document.querySelector("#lithosphere-field").value;
+    const geographicGrid = regularLithosphereGrid(lithosphereTable, field);
+    const grid = state.settings.coordinateSystem === "spherical"
+      ? geographicGrid
+      : remapGeographicGridToCartesian(geographicGrid, geographicSourceBounds(), cartesianModelBounds());
+    const selectedModel = lithosphereModelById(state.lithosphere?.selectedModelId);
+    state.lithosphere = {
+      ...DEFAULT_LITHOSPHERE, ...(state.lithosphere || {}), grid: {
+        ...grid,
+        model: selectedModel?.name || state.lithosphere?.sourceName || "Local lithosphere table",
+        sourceModelId: selectedModel?.id || null
+      }
+    };
+    ensureColorMaps().lithosphere.min = grid.min;
+    ensureColorMaps().lithosphere.max = grid.max;
+    document.querySelector("#clear-lithosphere").disabled = false;
+    const mapping = grid.coordinateMapping ? " · geographic window mapped to Cartesian X/Y" : "";
+    setLithosphereStatus(`${grid.field} loaded · ${grid.nx} × ${grid.ny} cells · range ${grid.min.toPrecision(4)} to ${grid.max.toPrecision(4)}${mapping}.`, "success");
+    persist();
+    updateAll(false);
+  } catch (error) {
+    setLithosphereStatus(error.message, "error");
+  }
 }
 
 function syncTomographyUI() {
@@ -3935,7 +4830,9 @@ async function loadTomographySlice() {
   document.querySelector("#load-tomography").disabled = true;
   try {
     const query = new URLSearchParams(Object.entries(values).map(([key, value]) => [key, String(value)]));
-    let response = await fetch(`/api/tomography/grid?${query}`, { signal: tomographyRequest.signal });
+    let response = await fetchWithProgress(
+      `/api/tomography/grid?${query}`, { signal: tomographyRequest.signal }, "Loading numerical tomography grid"
+    );
     if (response.ok) {
       const grid = await response.json();
       addTomographyReference(values.model);
@@ -3967,7 +4864,9 @@ async function loadTomographySlice() {
     const numericMessage = (await response.text()).slice(0, 180);
     if (response.status !== 422) throw new Error(numericMessage || `Numerical request failed (${response.status})`);
     setTomographyStatus("Numerical grid is unavailable for this model; requesting its attributed SubMachine image fallback…", "loading");
-    response = await fetch(`/api/submachine/slice?${query}`, { signal: tomographyRequest.signal });
+    response = await fetchWithProgress(
+      `/api/submachine/slice?${query}`, { signal: tomographyRequest.signal }, "Downloading SubMachine depth slice"
+    );
     if (!response.ok) throw new Error((await response.text()).slice(0, 180) || `Fallback request failed (${response.status})`);
     const src = await blobToDataUrl(await response.blob());
     const image = new Image();
@@ -4089,6 +4988,17 @@ function syncGravityUI() {
   } else {
     range.textContent = "No gravity field computed";
   }
+  const unit = gravity.result?.unit || (["gxx", "gxy", "gxz", "gyy", "gyz", "gzz"].includes(gravity.field) ? "E" : "mGal");
+  const limit = gravityScaleLimit(gravity.result);
+  document.querySelector("#gravity-scale-title").textContent = gravityFieldLabel(gravity.field);
+  document.querySelector("#gravity-scale-unit").textContent = unit;
+  document.querySelector("#gravity-scale-min").textContent = formatGravityScaleValue(-limit, "");
+  document.querySelector("#gravity-scale-zero").textContent = "0";
+  document.querySelector("#gravity-scale-max").textContent = formatGravityScaleValue(limit, "");
+  document.querySelector("#gravity-scale-bar").style.background =
+    `linear-gradient(90deg, ${colorMapStops("gravity").join(", ")})`;
+  const workspaceField = document.querySelector("#gravity-workspace-field");
+  if (workspaceField) workspaceField.value = gravity.field;
 }
 
 function syncAppearanceEditor() {
@@ -4148,8 +5058,9 @@ function syncColorEditor() {
     document.querySelector(`#color-${name}`).value = colors[index];
   });
   const stops = colorMapStops(field);
+  const positions = colorMapPositions(field);
   document.querySelector("#color-gradient-preview").style.background =
-    `linear-gradient(90deg, ${stops.map((color, index) => `${color} ${index / Math.max(1, stops.length - 1) * 100}%`).join(", ")})`;
+    `linear-gradient(90deg, ${stops.map((color, index) => `${color} ${positions[index] * 100}%`).join(", ")})`;
 }
 
 function updateColorMapFromControls() {
@@ -4294,6 +5205,7 @@ async function loadPaleogeography(local = false) {
     return;
   }
   const button = document.querySelector(local ? "#load-local-gplates" : "#load-paleogeography");
+  const activity = startActivity(local ? "Loading bundled paleogeography" : "Downloading GPlates reconstruction");
   button.disabled = true;
   document.querySelector("#paleo-status").textContent = local
     ? "Reading reconstructed geometries from contrib/gplates/data…"
@@ -4312,9 +5224,11 @@ async function loadPaleogeography(local = false) {
     document.querySelector("#paleo-status").textContent =
       `${paleo.source}. ${count} geometries loaded as a drawing reference.`;
     updatePaleoUI(); updateAll(false);
+    finishActivity(activity, `${count} reconstructed geometries loaded`, "success");
     showToast(`${count} reconstructed geometries loaded`);
   } catch (error) {
     document.querySelector("#paleo-status").textContent = `Reconstruction failed: ${error.message}`;
+    finishActivity(activity, "Paleogeography loading failed", "error");
   } finally {
     button.disabled = false;
   }
@@ -4516,28 +5430,37 @@ function importTextTopography(text, extension) {
 }
 
 async function loadEtopoRelief() {
-  if (state.settings.coordinateSystem !== "spherical") {
-    showToast("ETOPO requires a spherical longitude/latitude grid");
+  let geographicBounds;
+  try {
+    geographicBounds = geographicSourceBounds();
+  } catch (error) {
+    document.querySelector("#topography-source-note").textContent = error.message;
+    showToast(error.message);
     return;
   }
-  const bounds = {
-    west: Number(state.settings.xMin), east: Number(state.settings.xMax),
-    south: Number(state.settings.yMin), north: Number(state.settings.yMax)
-  };
+  const modelBounds = state.settings.coordinateSystem === "spherical" ? geographicBounds : cartesianModelBounds();
   document.querySelector("#load-etopo").disabled = true;
   document.querySelector("#topography-source-note").textContent = "Loading shaded relief from NOAA NCEI…";
   try {
-    const response = await fetch(`/api/etopo/relief?${new URLSearchParams(bounds)}`);
+    const response = await fetchWithProgress(
+      `/api/etopo/relief?${new URLSearchParams(geographicBounds)}`, {}, "Downloading NOAA ETOPO relief"
+    );
     if (!response.ok) throw new Error(await response.text());
     const src = await blobToDataUrl(await response.blob());
     const image = new Image();
     await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = src; });
     topographyImage = image;
     const topography = ensureTopography();
-    topography.imageSrc = src; topography.bounds = bounds; topography.source = "NOAA ETOPO relief";
+    topography.imageSrc = src;
+    topography.bounds = modelBounds;
+    topography.geographicBounds = geographicBounds;
+    topography.coordinateMapping = state.settings.coordinateSystem === "spherical" ? "longitude-latitude" : "equirectangular-to-cartesian";
+    topography.source = "NOAA ETOPO relief";
     updateTopographyUI(); updateAll(false);
-    document.querySelector("#topography-source-note").textContent = "ETOPO relief loaded for the current bounds. Sculpt edits are stored as a separate elevation field.";
-    showToast("NOAA ETOPO relief loaded");
+    document.querySelector("#topography-source-note").textContent = state.settings.coordinateSystem === "spherical"
+      ? "ETOPO relief loaded for the current longitude/latitude bounds. Sculpt edits are stored separately."
+      : "ETOPO geographic relief mapped across the Cartesian X/Y domain. Source bounds are retained in the project.";
+    showToast(`NOAA ETOPO relief loaded${state.settings.coordinateSystem === "spherical" ? "" : " and mapped to Cartesian X/Y"}`);
   } catch (error) {
     document.querySelector("#topography-source-note").textContent = `ETOPO load failed: ${error.message}`;
   } finally {
@@ -4670,6 +5593,8 @@ wrap.addEventListener("drop", event => {
 canvas.addEventListener("pointerdown", event => {
   setActiveViewport("primary");
   canvas.focus();
+  const legendPoint = rawCanvasPoint(canvas, event);
+  if (beginGravityLegendDrag("primary", canvas, event, legendPoint)) return;
   if (cameraPanMode || event.shiftKey || event.button === 1 || event.button === 2) {
     event.preventDefault();
     cameraDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, mode: "pan" };
@@ -4802,12 +5727,23 @@ canvas.addEventListener("pointerdown", event => {
 });
 
 canvas.addEventListener("dblclick", event => {
+  if (gravityLegendHit("primary", rawCanvasPoint(canvas, event))) {
+    event.preventDefault();
+    resetGravityLegend("primary");
+    return;
+  }
   if (cameraPanMode || viewMode !== "plan" || tool !== "select") return;
   event.preventDefault();
   addVertexAt(canvasPoint(event), true);
 });
 
 canvas.addEventListener("pointermove", event => {
+  const legendPoint = rawCanvasPoint(canvas, event);
+  if (moveGravityLegend(event, legendPoint)) return;
+  if (!cameraDrag && !drag && !marqueeSelection && gravityLegendHit("primary", legendPoint)) {
+    canvas.style.cursor = "grab";
+    return;
+  }
   if (cameraDrag) {
     const dx = event.clientX - cameraDrag.x; const dy = event.clientY - cameraDrag.y;
     cameraDrag.x = event.clientX; cameraDrag.y = event.clientY;
@@ -4919,6 +5855,7 @@ canvas.addEventListener("pointermove", event => {
   updateAll(false);
 });
 canvas.addEventListener("pointerup", () => {
+  if (finishGravityLegendDrag(canvas)) return;
   if (cameraDrag) {
     cameraDrag = null;
     canvas.style.cursor = cameraPanMode || viewMode === "three-d" ? "grab" : "default";
@@ -4964,6 +5901,7 @@ canvas.addEventListener("pointerleave", () => {
   }
 });
 canvas.addEventListener("pointercancel", () => {
+  if (finishGravityLegendDrag(canvas)) return;
   cameraDrag = null;
   marqueeSelection = null;
   canvas.style.cursor = cameraPanMode || viewMode === "three-d" ? "grab" : "default";
@@ -5008,6 +5946,8 @@ canvas.addEventListener("keydown", event => {
 secondaryCanvas.addEventListener("pointerdown", event => {
   setActiveViewport("secondary");
   secondaryCanvas.focus();
+  const point = rawCanvasPoint(secondaryCanvas, event);
+  if (beginGravityLegendDrag("secondary", secondaryCanvas, event, point)) return;
   const orbit = viewportModes.secondary === "three-d" && event.button === 0 && !cameraPanMode && !event.shiftKey;
   if (!(orbit || cameraPanMode || event.shiftKey || event.button === 1 || event.button === 2)) return;
   event.preventDefault();
@@ -5016,6 +5956,12 @@ secondaryCanvas.addEventListener("pointerdown", event => {
   secondaryCanvas.setPointerCapture(event.pointerId);
 });
 secondaryCanvas.addEventListener("pointermove", event => {
+  const point = rawCanvasPoint(secondaryCanvas, event);
+  if (moveGravityLegend(event, point)) return;
+  if (!cameraDrag && gravityLegendHit("secondary", point)) {
+    secondaryCanvas.style.cursor = "grab";
+    return;
+  }
   if (!cameraDrag || cameraDrag.viewport !== "secondary") return;
   const dx = event.clientX - cameraDrag.x; const dy = event.clientY - cameraDrag.y;
   cameraDrag.x = event.clientX; cameraDrag.y = event.clientY;
@@ -5023,14 +5969,22 @@ secondaryCanvas.addEventListener("pointermove", event => {
   else changeCamera({ panX: dx, panY: dy });
 });
 secondaryCanvas.addEventListener("pointerup", () => {
+  if (finishGravityLegendDrag(secondaryCanvas)) return;
   if (cameraDrag?.viewport !== "secondary") return;
   cameraDrag = null;
   secondaryCanvas.style.cursor = cameraPanMode || viewportModes.secondary === "three-d" ? "grab" : "default";
   persist();
 });
 secondaryCanvas.addEventListener("pointercancel", () => {
+  if (finishGravityLegendDrag(secondaryCanvas)) return;
   if (cameraDrag?.viewport === "secondary") cameraDrag = null;
   secondaryCanvas.style.cursor = cameraPanMode || viewportModes.secondary === "three-d" ? "grab" : "default";
+});
+secondaryCanvas.addEventListener("dblclick", event => {
+  const point = rawCanvasPoint(secondaryCanvas, event);
+  if (!gravityLegendHit("secondary", point)) return;
+  event.preventDefault();
+  resetGravityLegend("secondary");
 });
 secondaryCanvas.addEventListener("wheel", event => {
   setActiveViewport("secondary");
@@ -5185,7 +6139,7 @@ document.querySelector("#topography-file").addEventListener("change", async even
   try {
     const extension = file.name.split(".").pop().toLowerCase();
     if (["png", "jpg", "jpeg"].includes(extension)) await importRasterTopography(file);
-    else importTextTopography(await file.text(), extension);
+    else importTextTopography(await readFileWithProgress(file, `Opening topography ${file.name}`), extension);
     state.topography.source = `Imported · ${file.name}`;
     updateTopographyUI(); updateAll(false);
     showToast("Topography imported");
@@ -5217,6 +6171,24 @@ document.querySelector("#topography-mode").addEventListener("change", event => {
       ? "Isostatic density framework enabled"
       : "Terrain topography enabled");
 });
+document.querySelectorAll("[data-geographic-bound]").forEach(input => {
+  input.addEventListener("input", event => {
+    const keys = {
+      west: "geographicSourceWest",
+      east: "geographicSourceEast",
+      south: "geographicSourceSouth",
+      north: "geographicSourceNorth"
+    };
+    state.settings[keys[event.target.dataset.geographicBound]] = Number(event.target.value);
+    document.querySelectorAll(`[data-geographic-bound="${event.target.dataset.geographicBound}"]`).forEach(peer => {
+      if (peer !== event.target) peer.value = event.target.value;
+    });
+    persist();
+  });
+  input.addEventListener("change", () => {
+    if (lithosphereTable && state.settings.coordinateSystem !== "spherical") applyLithosphereField();
+  });
+});
 [
   ["background-density", "backgroundDensity", 1],
   ["gravity-magnitude", "gravityMagnitude", 1],
@@ -5246,6 +6218,12 @@ document.querySelector("#export-topography").addEventListener("click", () => {
 });
 const cameraGrip = document.querySelector("#camera-grip");
 const cameraControls = document.querySelector(".camera-controls");
+document.querySelector("#toggle-camera-controls").addEventListener("click", () => {
+  state.ui.cameraControlsExpanded = !state.ui.cameraControlsExpanded;
+  syncCameraControlsExpansion();
+  requestAnimationFrame(positionCameraControls);
+  persist();
+});
 cameraGrip.addEventListener("pointerdown", event => {
   event.preventDefault();
   event.stopPropagation();
@@ -5391,6 +6369,28 @@ document.querySelector("#close-tomography").addEventListener("click", () => {
   document.querySelector("#tomography-editor").classList.add("hidden");
   document.querySelector("#toggle-tomography").setAttribute("aria-expanded", "false");
 });
+document.querySelector("#toggle-lithosphere").addEventListener("click", () => {
+  const editor = document.querySelector("#lithosphere-editor");
+  const willOpen = editor.classList.contains("hidden");
+  editor.classList.toggle("hidden", !willOpen);
+  document.querySelector("#toggle-lithosphere").setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) syncLithosphereUI();
+});
+document.querySelector("#close-lithosphere").addEventListener("click", () => {
+  document.querySelector("#lithosphere-editor").classList.add("hidden");
+  document.querySelector("#toggle-lithosphere").setAttribute("aria-expanded", "false");
+});
+document.querySelector("#toggle-planetary").addEventListener("click", () => {
+  const editor = document.querySelector("#planetary-editor");
+  const willOpen = editor.classList.contains("hidden");
+  editor.classList.toggle("hidden", !willOpen);
+  document.querySelector("#toggle-planetary").setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) renderPlanetaryCatalog();
+});
+document.querySelector("#close-planetary").addEventListener("click", () => {
+  document.querySelector("#planetary-editor").classList.add("hidden");
+  document.querySelector("#toggle-planetary").setAttribute("aria-expanded", "false");
+});
 document.querySelector("#toggle-research").addEventListener("click", () => {
   const editor = document.querySelector("#research-editor");
   const willOpen = editor.classList.contains("hidden");
@@ -5441,6 +6441,10 @@ Object.entries(gravityInputKeys).forEach(([id, key]) => document.querySelector(`
   gravity.signature = null;
   if (gravity.enabled) computeGravityPreview(true);
   persist(); draw();
+  if (document.querySelector("#gravity-workspace")?.open) {
+    syncGravityWorkspaceControls();
+    renderGravityWorkspace();
+  }
 }));
 document.querySelector("#gravity-enabled").addEventListener("change", event => {
   const gravity = ensureGravity();
@@ -5459,7 +6463,7 @@ document.querySelector("#gravity-observation-file").addEventListener("change", a
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    const observations = (await file.text()).split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
+    const observations = (await readFileWithProgress(file, `Opening gravity observations ${file.name}`)).split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
       const values = line.split(/[,\t; ]+/).slice(0, 3).map(Number);
       return values.every(Number.isFinite) ? { x: values[0], y: values[1], value: values[2] } : null;
     }).filter(Boolean);
@@ -5486,23 +6490,87 @@ document.querySelector("#clear-gravity-observations").addEventListener("click", 
   showToast("Observed gravity removed");
 });
 document.querySelector("#open-gravity-workspace").addEventListener("click", () => {
-  const gravity = ensureGravity();
-  gravity.enabled = true;
-  gravity.signature = null;
-  computeGravityPreview(true);
-  syncGravityUI();
-  const dialog = document.querySelector("#gravity-workspace");
-  dialog.showModal();
-  requestAnimationFrame(renderGravityWorkspace);
+  openGravityWorkspace({ recompute: true });
 });
-document.querySelector("#close-gravity-workspace").addEventListener("click", () => document.querySelector("#gravity-workspace").close());
+document.querySelector("#minimize-gravity-workspace").addEventListener("click", minimizeGravityWorkspace);
+document.querySelector("#restore-gravity-workspace").addEventListener("click", () => openGravityWorkspace());
+document.querySelector("#close-gravity-workspace").addEventListener("click", () => {
+  state.ui.gravityWorkspaceMinimized = false;
+  document.querySelector("#gravity-workspace").close();
+  syncWorkspaceDock();
+  persist();
+});
 document.querySelector("#refresh-gravity-workspace").addEventListener("click", () => {
   computeGravityPreview(true);
   renderGravityWorkspace();
 });
+document.querySelector("#gravity-workspace-field").addEventListener("change", event => {
+  const gravity = ensureGravity();
+  gravity.field = event.target.value;
+  gravity.signature = null;
+  computeGravityPreview(true);
+  syncGravityUI();
+  syncGravityWorkspaceControls();
+  persist();
+  draw();
+  renderGravityWorkspace();
+  showToast(`${gravityFieldLabel(gravity.field)} displayed in map, 3D and section profile`);
+});
+document.querySelector("#gravity-draw-section").addEventListener("click", () => {
+  if (state.ui.gravityWorkspaceSectionPicking) {
+    if (sectionDraft.length >= 2) {
+      state.sectionPath = sectionDraft.map(point => [...point]);
+      state.settings.section = [[...sectionDraft[0]], [...sectionDraft.at(-1)]];
+      showToast(`Gravity section saved · ${sectionDraft.length} control points`);
+    } else {
+      showToast("Section drawing cancelled · at least two points are required");
+    }
+    sectionDraft = [];
+    state.ui.gravityWorkspaceSectionPicking = false;
+  } else {
+    sectionDraft = [];
+    state.ui.gravityWorkspaceSectionPicking = true;
+    state.ui.gravityWorkspaceContourEditing = false;
+    const grid = document.querySelector("#gravity-workspace-grid");
+    if (!["triple", "map-section"].includes(grid.dataset.layout)) {
+      grid.dataset.layout = "map-section";
+      state.ui.gravityWorkspaceLayout = "map-section";
+      document.querySelector("#gravity-workspace-layout").value = "map-section";
+    }
+    showToast("Click two or more points on the gravity map · curved sections are supported");
+  }
+  syncGravityWorkspaceControls();
+  persist();
+  draw();
+  requestAnimationFrame(renderGravityWorkspace);
+});
+document.querySelector("#gravity-edit-contours").addEventListener("click", () => {
+  const active = !state.ui.gravityWorkspaceContourEditing;
+  state.ui.gravityWorkspaceContourEditing = active;
+  state.ui.gravityWorkspaceSectionPicking = false;
+  sectionDraft = [];
+  if (active) state.ui.gravityWorkspaceContoursOnly = true;
+  syncGravityWorkspaceControls();
+  persist();
+  renderGravityWorkspace();
+  showToast(active
+    ? "Contour editing enabled · select a feature, then drag a visible vertex"
+    : "Contour editing finished");
+});
+document.querySelector("#toggle-gravity-feature-contours").addEventListener("click", () => {
+  state.ui.gravityWorkspaceContoursOnly = !state.ui.gravityWorkspaceContoursOnly;
+  syncGravityWorkspaceControls();
+  persist();
+  renderGravityWorkspace();
+  showToast(state.ui.gravityWorkspaceContoursOnly
+    ? "Gravity workspace · feature contours only"
+    : "Gravity workspace · feature fills restored");
+});
 document.querySelector("#export-gravity-screenshot").addEventListener("click", exportGravityScreenshot);
 document.querySelector("#gravity-workspace-layout").addEventListener("change", event => {
   document.querySelector("#gravity-workspace-grid").dataset.layout = event.target.value;
+  state.ui.gravityWorkspaceLayout = event.target.value;
+  persist();
   requestAnimationFrame(renderGravityWorkspace);
 });
 bindGravityWorkspaceCanvas(gravityMapCanvas, "plan");
@@ -5775,11 +6843,36 @@ document.querySelectorAll("[data-output]").forEach(button => button.addEventList
 
 document.querySelector("#download-wb").addEventListener("click", () => download("world-builder-model.wb", buildWbText(), "application/json"));
 document.querySelector("#download-grid").addEventListener("click", () => download("world-builder-model.grid", buildGrid(state.settings), "text/plain"));
-document.querySelector("#download-vtp").addEventListener("click", () => {
-  if (!state.features.length) return showToast("Add or import at least one feature before exporting VTK.js geometry");
-  download("world-builder-model.vtp", buildVtp(state.settings, state.features), "application/vnd.vtk.vtp+xml");
-  showToast("VTK.js-compatible PolyData exported · temperature, density and composition included");
-});
+const geometryExports = {
+  vtp: {
+    name: "world-builder-model.vtp", mime: "application/vnd.vtk.vtp+xml", build: buildVtp,
+    message: "VTP PolyData exported · vtk.js and ParaView compatible"
+  },
+  vtk: {
+    name: "world-builder-model.vtk", mime: "application/vnd.vtk", build: buildLegacyVtk,
+    message: "Legacy ASCII VTK exported · physical point arrays included"
+  },
+  obj: {
+    name: "world-builder-model.obj", mime: "text/plain", build: buildObj,
+    message: "OBJ surface geometry exported"
+  },
+  geojson: {
+    name: "world-builder-model.geojson", mime: "application/geo+json", build: buildGeoJson,
+    message: "GeoJSON plan geometry exported · feature properties included"
+  },
+  csv: {
+    name: "world-builder-model-vertices.csv", mime: "text/csv", build: buildGeometryCsv,
+    message: "Geometry vertices and physical attributes exported as CSV"
+  }
+};
+document.querySelectorAll("[data-geometry-export]").forEach(button => button.addEventListener("click", () => {
+  if (!state.features.length) return showToast("Add or import at least one feature before exporting geometry");
+  const exporter = geometryExports[button.dataset.geometryExport];
+  if (!exporter) return;
+  download(exporter.name, exporter.build(state.settings, state.features), exporter.mime);
+  button.closest(".export-menu").open = false;
+  showToast(exporter.message);
+}));
 document.querySelector("#save-project-state").addEventListener("click", () => {
   download("world-builder-project.gwbproject", `${JSON.stringify(buildProjectStateDocument(), null, 2)}\n`, "application/json");
   showToast("Complete editable project state downloaded");
@@ -5788,7 +6881,7 @@ document.querySelector("#open-project-state").addEventListener("change", async e
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    restoreProjectStateDocument(JSON.parse(await file.text()));
+    restoreProjectStateDocument(JSON.parse(await readFileWithProgress(file, `Opening project ${file.name}`)));
     showToast(`${state.features.length} features restored from project state`);
   } catch (error) {
     showToast(error.message || "Could not open that project-state file");
@@ -5811,7 +6904,8 @@ document.querySelector("#new-project").addEventListener("click", () => {
     sceneLayers: { ...DEFAULT_SCENE_LAYERS },
     gravity: { ...DEFAULT_GRAVITY },
     tomography: { ...DEFAULT_TOMOGRAPHY },
-    provenance: { tomographyModelIds: [] },
+    lithosphere: { ...DEFAULT_LITHOSPHERE },
+    provenance: { tomographyModelIds: [], lithosphereModelIds: [] },
     exportOptions: { ...DEFAULT_EXPORT_OPTIONS },
     colorMaps: structuredClone(DEFAULT_COLOR_MAPS),
     colorMapVersion: COLOR_MAP_VERSION,
@@ -5833,7 +6927,7 @@ document.querySelector("#import-file").addEventListener("change", async event =>
   const file = event.target.files[0];
   if (!file) return;
   try {
-    const world = parseWorldBuilderText(await file.text());
+    const world = parseWorldBuilderText(await readFileWithProgress(file, `Importing ${file.name}`));
     loadWorld(world);
     showToast(`${state.features.length} features imported`);
   } catch {
@@ -5856,6 +6950,72 @@ document.querySelector("#example-search").addEventListener("input", event => { e
 document.querySelector("#example-category").addEventListener("change", event => { exampleCategory = event.target.value; renderExamples(); });
 document.querySelector("#tomography-catalog-search").addEventListener("input", renderTomographyCatalog);
 document.querySelector("#tomography-catalog-provider").addEventListener("change", renderTomographyCatalog);
+document.querySelector("#lithosphere-catalog-search").addEventListener("input", renderLithosphereCatalog);
+document.querySelector("#lithosphere-catalog-provider").addEventListener("change", renderLithosphereCatalog);
+document.querySelector("#planetary-catalog-search").addEventListener("input", renderPlanetaryCatalog);
+document.querySelector("#planetary-catalog-family").addEventListener("change", renderPlanetaryCatalog);
+document.querySelector("#lithosphere-file").addEventListener("change", async event => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    installLithosphereTable(parseLithosphereTable(await readFileWithProgress(file, `Opening lithosphere table ${file.name}`)), file.name);
+  } catch (error) {
+    lithosphereTable = null;
+    setLithosphereStatus(error.message || "Could not read this lithosphere table.", "error");
+  } finally {
+    event.target.value = "";
+  }
+});
+document.querySelector("#apply-gwb-litho1").addEventListener("click", () => {
+  const feature = state.features.find(item => item.id === selectedId);
+  if (!feature) return showToast("Select a geological feature first");
+  if (state.settings.coordinateSystem !== "spherical") return showToast("GWB LITHO1.0 surfaces require a spherical grid");
+  const layer = document.querySelector("#gwb-litho1-layer").value;
+  const target = document.querySelector("#gwb-litho1-target").value;
+  const reference = `Litho1.0: ${layer}`;
+  if (target === "topography") feature.lithoTopographyReference = reference;
+  else feature.depthReferences = { ...(feature.depthReferences || {}), [target]: reference };
+  selectLithosphereReference("litho1");
+  updateAll();
+  setLithosphereStatus(`${reference} will define ${target === "topography" ? "depth-surface topography" : `${target} depth`} for ${feature.name} in the exported .wb file.`, "success");
+  showToast(`Bundled LITHO1.0 surface assigned to ${feature.name}`);
+});
+document.querySelector("#load-lithosphere-remote").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  const model = document.querySelector("#lithosphere-remote-table").value;
+  button.disabled = true;
+  setLithosphereStatus("Downloading the EarthScope GeoCSV table…", "loading");
+  try {
+    const response = await fetchWithProgress(
+      `/api/lithosphere/table?${new URLSearchParams({ model })}`, {}, "Downloading EarthScope CRUST1.0 table"
+    );
+    if (!response.ok) throw new Error(await response.text());
+    selectLithosphereReference("crust1");
+    installLithosphereTable(parseLithosphereTable(await response.text()), `EarthScope ${model.toUpperCase()}`);
+  } catch (error) {
+    setLithosphereStatus(error.message || "The EarthScope table could not be loaded.", "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+document.querySelector("#apply-lithosphere-field").addEventListener("click", applyLithosphereField);
+document.querySelector("#lithosphere-opacity").addEventListener("input", event => {
+  state.lithosphere = { ...DEFAULT_LITHOSPHERE, ...(state.lithosphere || {}), opacity: Number(event.target.value) };
+  draw();
+});
+document.querySelector("#lithosphere-opacity").addEventListener("change", persist);
+document.querySelector("#clear-lithosphere").addEventListener("click", () => {
+  state.lithosphere = { ...DEFAULT_LITHOSPHERE, opacity: state.lithosphere?.opacity ?? 72 };
+  lithosphereTable = null;
+  document.querySelector("#lithosphere-field").innerHTML = "<option>No data fields</option>";
+  document.querySelector("#lithosphere-field").disabled = true;
+  document.querySelector("#apply-lithosphere-field").disabled = true;
+  document.querySelector("#clear-lithosphere").disabled = true;
+  document.querySelector("#lithosphere-file-name").textContent = "No local lithosphere table loaded";
+  setLithosphereStatus("Local lithosphere preview cleared.");
+  persist();
+  updateAll(false);
+});
 ["export-comments", "export-references"].forEach(id => document.querySelector(`#${id}`).addEventListener("change", event => {
   state.exportOptions = {
     ...DEFAULT_EXPORT_OPTIONS, ...(state.exportOptions || {}),
@@ -5870,6 +7030,7 @@ function closeFloatingEditors() {
     ["shape-editor", "toggle-shape-editor"],
     ["map-editor", "toggle-map-editor"],
     ["tomography-editor", "toggle-tomography"],
+    ["lithosphere-editor", "toggle-lithosphere"],
     ["research-editor", "toggle-research"],
     ["gravity-editor", "toggle-gravity"],
     ["appearance-editor", "toggle-appearance"]
@@ -5991,6 +7152,9 @@ syncAppearanceEditor();
 syncColorEditor();
 syncGravityUI();
 syncTomographyUI();
+syncLithosphereUI();
+renderPlanetaryCatalog();
+syncWorkspaceDock();
 syncSectionActions();
 updateTopographyUI();
 updatePaleoUI();

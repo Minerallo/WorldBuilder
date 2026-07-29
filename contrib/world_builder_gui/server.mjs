@@ -34,6 +34,11 @@ const localGplatesLayers = {
   subduction: "trenches_with_avg_parameters.geojson",
   boundaries: "ridges_and_transforms.geojson"
 };
+const lithosphereTables = {
+  "crust1-rho": "https://ds.iris.edu/dms/products/emc/data/OLD/CRUST1.0/CRUST1.0-rho.csv",
+  "crust1-vp": "https://ds.iris.edu/dms/products/emc/data/OLD/CRUST1.0/CRUST1.0-vp.csv",
+  "crust1-vs": "https://ds.iris.edu/dms/products/emc/data/OLD/CRUST1.0/CRUST1.0-vs.csv"
+};
 const interfaceCapabilities = [
   { title: "Feature geometry editor", category: "interface", action: "shape", text: "Draw polygons, ellipses, curves and segmented lines; add, move and delete vertices; resize thickness and internal layers." },
   { title: "Tomography and iso-geometry", category: "interface", action: "tomography", text: "Load numerical S20RTS or S40RTS dVs, derive dVp with an explicit ratio, draw iso-boundaries and convert anomaly regions into editable features." },
@@ -150,12 +155,14 @@ createServer(async (request, response) => {
         headers: { "User-Agent": "GWB-Visual-Builder/1.0 (NOAA ETOPO interactive client)" }
       });
       if (!image.ok) throw new Error(`NOAA ETOPO returned HTTP ${image.status}.`);
+      const body = Buffer.from(await image.arrayBuffer());
       response.writeHead(200, {
         "Content-Type": image.headers.get("content-type") || "image/png",
+        "Content-Length": body.length,
         "Cache-Control": "private, max-age=900",
         "X-ETOPO-Source": sourceUrl
       });
-      response.end(Buffer.from(await image.arrayBuffer()));
+      response.end(body);
     } catch (error) {
       response.writeHead(/Invalid/.test(error.message) ? 400 : 502, { "Content-Type": "text/plain; charset=utf-8" });
       response.end(error.message);
@@ -184,6 +191,7 @@ createServer(async (request, response) => {
       const body = Buffer.from(await source.arrayBuffer());
       response.writeHead(200, {
         "Content-Type": source.headers.get("content-type") || "application/geo+json",
+        "Content-Length": body.length,
         "Cache-Control": "private, max-age=3600",
         "X-GPlates-Source": sourceUrl
       });
@@ -203,12 +211,37 @@ createServer(async (request, response) => {
       const body = await readFile(join(gplatesDataRoot, filename));
       response.writeHead(200, {
         "Content-Type": "application/geo+json; charset=utf-8",
+        "Content-Length": body.length,
         "Cache-Control": "private, max-age=3600",
         "X-GPlates-Source": `contrib/gplates/data/${filename}`
       });
       response.end(body);
     } catch (error) {
       response.writeHead(/Invalid/.test(error.message) ? 400 : 404, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end(error.message);
+    }
+    return;
+  }
+  if (pathname === "/api/lithosphere/table") {
+    try {
+      const model = requestUrl.searchParams.get("model");
+      const sourceUrl = lithosphereTables[model];
+      if (!sourceUrl) throw new Error("Invalid lithosphere table.");
+      const source = await fetch(sourceUrl, {
+        signal: AbortSignal.timeout(90000),
+        headers: { "User-Agent": "GWB-Visual-Builder/1.0 (EarthScope lithosphere client)" }
+      });
+      if (!source.ok) throw new Error(`EarthScope returned HTTP ${source.status}.`);
+      const body = Buffer.from(await source.arrayBuffer());
+      response.writeHead(200, {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Length": body.length,
+        "Cache-Control": "private, max-age=86400",
+        "X-Lithosphere-Source": sourceUrl
+      });
+      response.end(body);
+    } catch (error) {
+      response.writeHead(/Invalid/.test(error.message) ? 400 : 502, { "Content-Type": "text/plain; charset=utf-8" });
       response.end(error.message);
     }
     return;
@@ -255,6 +288,7 @@ createServer(async (request, response) => {
       const body = Buffer.from(await image.arrayBuffer());
       response.writeHead(200, {
         "Content-Type": image.headers.get("content-type") || "image/jpeg",
+        "Content-Length": body.length,
         "Cache-Control": "private, max-age=300",
         "X-Submachine-Result-Url": result.url,
         "X-Submachine-Image-Url": imageUrl
@@ -321,7 +355,10 @@ createServer(async (request, response) => {
   }
   try {
     const body = await readFile(target);
-    response.writeHead(200, { "Content-Type": mime[extname(target)] || "application/octet-stream" });
+    response.writeHead(200, {
+      "Content-Type": mime[extname(target)] || "application/octet-stream",
+      "Content-Length": body.length
+    });
     response.end(body);
   } catch {
     response.writeHead(404).end("Not found");

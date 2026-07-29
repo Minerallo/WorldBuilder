@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Visual model builder for the Geodynamic World Builder">
   <title>GWB Visual Builder</title>
-  <link rel="stylesheet" href="styles.css?v=34">
+  <link rel="stylesheet" href="styles.css?v=38">
 </head>
 <body>
   <header class="topbar">
@@ -35,9 +35,26 @@
       <input id="import-file" type="file" accept=".wb,.json" hidden>
       <button id="download-wb" class="primary">Export .wb</button>
       <button id="download-grid" class="ghost">Export .grid</button>
-      <button id="download-vtp" class="ghost" title="Export a vtk.js-compatible XML PolyData file">Export VTK.js</button>
+      <details class="export-menu">
+        <summary>Export geometry</summary>
+        <div class="export-menu-content">
+          <small>3D / DATA FORMATS</small>
+          <button data-geometry-export="vtp"><strong>VTP PolyData</strong><span>vtk.js · ParaView · attributes</span></button>
+          <button data-geometry-export="vtk"><strong>Legacy VTK</strong><span>ASCII · broad compatibility</span></button>
+          <button data-geometry-export="obj"><strong>Wavefront OBJ</strong><span>General 3D surface geometry</span></button>
+          <button data-geometry-export="geojson"><strong>GeoJSON</strong><span>GIS · web maps · plan geometry</span></button>
+          <button data-geometry-export="csv"><strong>Vertex CSV</strong><span>Coordinates and physical values</span></button>
+        </div>
+      </details>
     </div>
   </header>
+  <div id="activity-progress" class="activity-progress hidden" role="status" aria-live="polite" aria-atomic="true">
+    <div class="activity-progress-copy">
+      <span id="activity-progress-label">Working…</span>
+      <strong id="activity-progress-percent"></strong>
+    </div>
+    <div class="activity-progress-track" aria-hidden="true"><i id="activity-progress-fill"></i></div>
+  </div>
 
   <main class="workspace">
     <aside class="palette">
@@ -126,10 +143,20 @@
         </div>
         <div class="topography-source">
           <small>REAL DATA / IMPORT</small>
+          <details class="geographic-mapping">
+            <summary>Geographic source window</summary>
+            <div class="form-grid">
+              <label>West (°)<input data-geographic-bound="west" type="number" min="-180" max="180" step="any"></label>
+              <label>East (°)<input data-geographic-bound="east" type="number" min="-180" max="180" step="any"></label>
+              <label>South (°)<input data-geographic-bound="south" type="number" min="-90" max="90" step="any"></label>
+              <label>North (°)<input data-geographic-bound="north" type="number" min="-90" max="90" step="any"></label>
+            </div>
+            <p data-cartesian-mapping-note class="shape-help">In Cartesian models this longitude/latitude window is resampled across the complete X–Y domain using an equirectangular mapping.</p>
+          </details>
           <button id="load-etopo" class="wide">Load NOAA ETOPO relief</button>
           <button id="import-topography" class="wide ghost">Import PaleoDEM / elevation file</button>
           <input id="topography-file" type="file" accept=".asc,.xyz,.csv,.json,.png,.jpg,.jpeg" hidden>
-          <p id="topography-source-note" class="shape-help">ETOPO uses the current spherical longitude/latitude bounds. PaleoDEM, ASCII grid, XYZ/CSV, JSON and grayscale rasters can be edited numerically.</p>
+          <p id="topography-source-note" class="shape-help">ETOPO uses the geographic source window and fits it to the current spherical or Cartesian model domain. PaleoDEM, ASCII grid, XYZ/CSV, JSON and grayscale rasters can be edited numerically.</p>
         </div>
         <div class="topography-source paleogeography-source">
           <div class="source-title-row">
@@ -224,6 +251,7 @@
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="paleogeography" checked><span class="layer-eye">◉</span><span><strong>Paleogeography</strong><small>Continents and plate boundaries</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="referenceMap" checked><span class="layer-eye">◉</span><span><strong>Reference imagery</strong><small>Map or tomography background</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="tomography" checked><span class="layer-eye">◉</span><span><strong>Numerical tomography</strong><small>Sampleable dVs scalar grid</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="lithosphere" checked><span class="layer-eye">◉</span><span><strong>Lithosphere model</strong><small>Imported crust, LAB, thermal or density field</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="gravity" checked><span class="layer-eye">◉</span><span><strong>Gravity anomaly</strong><small>Live Bouguer, free-air or residual preview</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="legend" checked><span class="layer-eye">◉</span><span><strong>Colour scales</strong><small>Elevation and temperature legends</small></span></label>
         </div>
@@ -260,6 +288,8 @@
             <small>DATA &amp; RESEARCH</small>
             <button id="toggle-map-editor" class="icon-button" aria-expanded="false">Reference map</button>
             <button id="toggle-tomography" class="icon-button tomography-button" aria-expanded="false">Tomography</button>
+            <button id="toggle-lithosphere" class="icon-button lithosphere-button" aria-expanded="false">Lithosphere models</button>
+            <button id="toggle-planetary" class="icon-button planetary-button" aria-expanded="false">Planetary bodies</button>
             <button id="toggle-gravity" class="icon-button gravity-button" aria-expanded="false">Gravity</button>
             <button id="toggle-research" class="icon-button research-button" aria-expanded="false">Research functions</button>
           </div>
@@ -306,15 +336,20 @@
           <button id="finish-section-path" class="primary">Finish section</button>
           <button id="cancel-section-path" class="ghost">Cancel</button>
         </div>
-        <div class="camera-controls" aria-label="Camera controls">
-          <button id="camera-grip" class="camera-grip" title="Drag to move · double-click to dock left" aria-label="Move camera controls">⋮⋮</button>
-          <button id="zoom-out" class="icon-button" title="Zoom out" aria-label="Zoom out">−</button>
-          <span id="zoom-level">100%</span>
-          <button id="zoom-in" class="icon-button" title="Zoom in" aria-label="Zoom in">＋</button>
-          <button id="rotate-left" class="icon-button" title="Rotate view left" aria-label="Rotate view left">↶</button>
-          <button id="rotate-right" class="icon-button" title="Rotate view right" aria-label="Rotate view right">↷</button>
-          <button id="pan-camera" class="icon-button" title="Pan camera: drag the canvas (Shift-drag and middle-drag also work)" aria-label="Toggle camera pan">✋</button>
-          <button id="reset-camera" class="icon-button" title="Reset camera">Reset</button>
+        <div class="camera-controls collapsed" aria-label="Camera controls">
+          <button id="toggle-camera-controls" class="camera-toggle" title="Open camera controls" aria-label="Open camera controls" aria-expanded="false">
+            <span id="camera-toggle-icon" aria-hidden="true">⌖</span><small id="camera-zoom-compact">100%</small>
+          </button>
+          <div class="camera-controls-panel">
+            <button id="camera-grip" class="camera-grip" title="Drag to move · double-click to dock left" aria-label="Move camera controls">⋮⋮</button>
+            <button id="zoom-out" class="icon-button" title="Zoom out" aria-label="Zoom out">−</button>
+            <span id="zoom-level">100%</span>
+            <button id="zoom-in" class="icon-button" title="Zoom in" aria-label="Zoom in">＋</button>
+            <button id="rotate-left" class="icon-button" title="Rotate view left" aria-label="Rotate view left">↶</button>
+            <button id="rotate-right" class="icon-button" title="Rotate view right" aria-label="Rotate view right">↷</button>
+            <button id="pan-camera" class="icon-button" title="Pan camera: drag the canvas (Shift-drag and middle-drag also work)" aria-label="Toggle camera pan">✋</button>
+            <button id="reset-camera" class="icon-button" title="Reset camera">Reset</button>
+          </div>
         </div>
         <aside id="shape-editor" class="shape-editor hidden" aria-label="Shape editor">
           <div class="shape-editor-header">
@@ -476,6 +511,123 @@
           <a id="open-submachine" class="tomography-link" href="https://orfeus-eu.org/submachine/index.php?page=tomo_depth" target="_blank" rel="noreferrer">Open this workflow at SubMachine ↗</a>
           <p class="shape-help">S20RTS/S40RTS are evaluated from ASPECT spherical-harmonic coefficients. Models not downloadable from the public service use a labeled SubMachine image fallback.</p>
         </aside>
+        <aside id="lithosphere-editor" class="map-editor tomography-editor hidden" aria-label="Lithosphere data explorer">
+          <div class="shape-editor-header">
+            <div><small>EARTHSCOPE · LITMOD · 3D EARTH</small><strong>Lithosphere data</strong></div>
+            <button id="close-lithosphere" class="ghost" aria-label="Close lithosphere data explorer">×</button>
+          </div>
+          <p class="tomography-intro">Browse established crust and lithosphere models. Download their original data, then preview regular longitude/latitude scalar tables directly in Visual Builder.</p>
+          <details class="tomography-catalog-panel" open>
+            <summary>Available data models <span id="lithosphere-catalog-count">7</span></summary>
+            <div class="tomography-catalog-filters">
+              <input id="lithosphere-catalog-search" type="search" placeholder="Search LAB, density, temperature…">
+              <select id="lithosphere-catalog-provider" aria-label="Filter lithosphere provider">
+                <option value="all">All providers</option>
+                <option value="GWB bundled dataset / EarthScope">GWB bundled dataset / EarthScope</option>
+                <option value="EarthScope EMC / UCSD">EarthScope EMC / UCSD</option>
+                <option value="EarthScope EMC">EarthScope EMC</option>
+                <option value="LitMod / GPlates">LitMod / GPlates</option>
+                <option value="3D Earth">3D Earth</option>
+                <option value="Lithosphere.info">Lithosphere.info</option>
+              </select>
+            </div>
+            <div class="tomography-availability-key">
+              <span class="numerical">● CSV/table preview</span><span class="download">● original archive</span>
+            </div>
+            <div id="lithosphere-catalog-list" class="tomography-catalog-list"></div>
+          </details>
+          <small class="shape-subhead">GWB BUILT-IN LITHO1.0</small>
+          <p class="shape-help">GWB can evaluate its bundled LITHO1.0 surfaces directly inside spherical feature polygons. Keep a numerical editor depth for preview and assign the exact dataset surface for export.</p>
+          <label>LITHO1.0 surface
+            <select id="gwb-litho1-layer">
+              <option value="ice top">Ice top</option>
+              <option value="water top">Water top</option>
+              <option value="sediment 1 top">Sediment 1 top</option>
+              <option value="sediment 2 top">Sediment 2 top</option>
+              <option value="sediment 3 top">Sediment 3 top</option>
+              <option value="crust 1 top">Crust 1 top</option>
+              <option value="crust 2 top">Crust 2 top</option>
+              <option value="crust 3 top">Crust 3 top</option>
+              <option value="lithosphere top">Lithosphere top / crust 3 bottom</option>
+              <option value="lithosphere bottom">Lithosphere bottom / asthenosphere top</option>
+              <option value="asthenosphere bottom">Asthenosphere bottom</option>
+            </select>
+          </label>
+          <label>Apply to selected feature
+            <select id="gwb-litho1-target">
+              <option value="max">Maximum depth</option>
+              <option value="min">Minimum depth</option>
+              <option value="topography">Depth-surface topography</option>
+            </select>
+          </label>
+          <button id="apply-gwb-litho1" class="wide ghost">Use bundled surface in .wb export</button>
+          <small class="shape-subhead">DIRECT SERVER TABLE</small>
+          <details class="geographic-mapping">
+            <summary>Geographic → Cartesian mapping</summary>
+            <div class="form-grid">
+              <label>West (°)<input data-geographic-bound="west" type="number" min="-180" max="180" step="any"></label>
+              <label>East (°)<input data-geographic-bound="east" type="number" min="-180" max="180" step="any"></label>
+              <label>South (°)<input data-geographic-bound="south" type="number" min="-90" max="90" step="any"></label>
+              <label>North (°)<input data-geographic-bound="north" type="number" min="-90" max="90" step="any"></label>
+            </div>
+            <p data-cartesian-mapping-note class="shape-help">The selected geographic window is clipped and resampled into the current Cartesian X–Y domain. Original bounds remain attached as provenance.</p>
+          </details>
+          <label>EarthScope CRUST1.0 package
+            <select id="lithosphere-remote-table">
+              <option value="crust1-rho">Density, boundaries and thickness</option>
+              <option value="crust1-vp">Vp, boundaries and thickness</option>
+              <option value="crust1-vs">Vs, boundaries and thickness</option>
+            </select>
+          </label>
+          <button id="load-lithosphere-remote" class="wide primary tomography-load">Load from EarthScope</button>
+          <small class="shape-subhead">LOCAL TABLE PREVIEW</small>
+          <p class="shape-help">Accepted: comma- or whitespace-separated text with a header containing <code>longitude</code>/<code>lon</code>, <code>latitude</code>/<code>lat</code>, and numerical fields.</p>
+          <label class="wide file-trigger">Open CSV / TXT / XYZ
+            <input id="lithosphere-file" type="file" accept=".csv,.txt,.xyz,.dat" hidden>
+          </label>
+          <p id="lithosphere-file-name" class="map-file-name">No local lithosphere table loaded</p>
+          <label>Displayed field
+            <select id="lithosphere-field" disabled><option>No data fields</option></select>
+          </label>
+          <label>Overlay opacity <input id="lithosphere-opacity" type="range" min="0" max="100" value="72"></label>
+          <div class="layer-actions">
+            <button id="apply-lithosphere-field" class="primary" disabled>Preview field</button>
+            <button id="clear-lithosphere" class="ghost" disabled>Clear</button>
+          </div>
+          <div id="lithosphere-status" class="tomography-status">Ready · choose a model source or import a downloaded geographic table.</div>
+          <p class="shape-help">NetCDF/HDF5 files retain more variables but require a volume adapter. Export a selected 2D surface to GeoCSV/CSV first; original source and paper links remain available for reproducibility.</p>
+        </aside>
+        <aside id="planetary-editor" class="map-editor tomography-editor hidden" aria-label="Planetary body library">
+          <div class="shape-editor-header">
+            <div><small>NASA PDS · USGS ASTROGEOLOGY</small><strong>Planetary body library</strong></div>
+            <button id="close-planetary" class="ghost" aria-label="Close planetary body library">×</button>
+          </div>
+          <p class="tomography-intro">Start a spherical GWB model with body-specific radius, uniform surface gravity and editable thermal assumptions. Browse terrain, gravity, geology and imagery sources relevant to each world.</p>
+          <div class="planetary-warning">
+            <strong>Measured versus assumed</strong>
+            <span>Radius and surface gravity are physical constants. Surface and interior temperatures, density and model depth are starting assumptions—review them for your scientific problem.</span>
+          </div>
+          <details class="tomography-catalog-panel" open>
+            <summary>Available worlds <span id="planetary-catalog-count">11</span></summary>
+            <div class="tomography-catalog-filters">
+              <input id="planetary-catalog-search" type="search" placeholder="Search Mars, ice shell, gravity…">
+              <select id="planetary-catalog-family" aria-label="Filter planetary body family">
+                <option value="all">All body families</option>
+                <option value="terrestrial planet">Terrestrial planets</option>
+                <option value="rocky satellite">Rocky satellites</option>
+                <option value="volcanic icy-world satellite">Volcanic satellites</option>
+                <option value="icy satellite">Icy satellites</option>
+                <option value="dwarf planet">Dwarf planets</option>
+              </select>
+            </div>
+            <div id="planetary-catalog-list" class="tomography-catalog-list planetary-catalog-list"></div>
+          </details>
+          <div class="tomography-status">Applying a preset preserves existing features but changes the model to a global 3D spherical domain. Data products open at their authoritative provider for download and can then be imported as reference maps or elevation fields.</div>
+          <div class="layer-actions research-links">
+            <a class="ghost" href="https://astrogeology.usgs.gov/search" target="_blank" rel="noreferrer">USGS Astropedia ↗</a>
+            <a class="ghost" href="https://pds.nasa.gov/" target="_blank" rel="noreferrer">NASA PDS ↗</a>
+          </div>
+        </aside>
         <aside id="research-editor" class="map-editor research-editor hidden" aria-label="Functionality research">
           <div class="shape-editor-header">
             <div><small>LOCAL KNOWLEDGE INDEX</small><strong>Research GWB functions</strong></div>
@@ -548,6 +700,11 @@
           <button id="recompute-gravity" class="wide primary">Recompute gravity</button>
           <button id="open-gravity-workspace" class="wide ghost">Open gravity results workspace</button>
           <div id="gravity-status" class="tomography-status">Configure density models, then enable the overlay.</div>
+          <div id="gravity-scale-preview" class="gravity-scale-preview" aria-label="Gravity colour scale">
+            <div class="gravity-scale-heading"><strong id="gravity-scale-title">Bouguer anomaly</strong><span id="gravity-scale-unit">mGal</span></div>
+            <div id="gravity-scale-bar" class="gravity-scale-bar"></div>
+            <div class="gravity-scale-labels"><span id="gravity-scale-min">−1</span><span id="gravity-scale-zero">0</span><span id="gravity-scale-max">+1</span></div>
+          </div>
           <div id="gravity-range" class="gravity-range">No gravity field computed</div>
           <a class="tomography-link" href="https://juliageodynamics.github.io/GeophysicalModelGenerator.jl/dev/man/gravity_code/" target="_blank" rel="noreferrer">GMG voxel_grav documentation ↗</a>
           <p class="shape-help">The browser uses a responsive infinite-slab preview and recomputes after model edits. It is not a replacement for GMG’s full 3D voxel integration; export to a future Julia backend will provide publication-grade anomalies and gradients.</p>
@@ -598,6 +755,7 @@
           <label>Preset
             <select id="color-preset">
               <option value="crameri-vik">Crameri vik · scientific diverging</option>
+              <option value="crameri-oleron">Crameri oleron · −8500 / 0 / +4500 m</option>
               <option value="thermal">Thermal</option>
               <option value="coolwarm">Cool to warm</option>
               <option value="viridis">Viridis</option>
@@ -608,7 +766,7 @@
             </select>
           </label>
           <div id="color-gradient-preview" class="color-gradient-preview"><i></i><i></i><i></i></div>
-          <p class="shape-help">Tomography defaults to Fabio Crameri’s perceptually uniform <strong>vik</strong> scientific colour map.</p>
+          <p class="shape-help">Tomography defaults to Fabio Crameri’s <strong>vik</strong>; topography uses the asymmetric <strong>oleron</strong> TwoSlopeNorm scale (−8500 / 0 / +4500 m).</p>
           <div class="color-range-labels"><span id="color-range-min-label">273</span><span id="color-range-max-label">1800</span></div>
           <div class="form-grid">
             <label>Minimum<input id="color-min" type="number" step="any"></label>
@@ -707,18 +865,49 @@
           <option value="section">Section only</option>
         </select>
       </label>
+      <label>Field
+        <select id="gravity-workspace-field">
+          <option value="bouguer">Bouguer anomaly</option>
+          <option value="free-air">Free-air anomaly</option>
+          <option value="residual">Residual gravity</option>
+          <option value="gxx">Gradient Gxx</option>
+          <option value="gxy">Gradient Gxy</option>
+          <option value="gxz">Gradient Gxz</option>
+          <option value="gyy">Gradient Gyy</option>
+          <option value="gyz">Gradient Gyz</option>
+          <option value="gzz">Gradient Gzz</option>
+        </select>
+      </label>
       <span class="gravity-workspace-actions">
         <button id="export-gravity-screenshot" class="ghost">📷 Screenshot</button>
         <button id="refresh-gravity-workspace" class="ghost">Refresh</button>
+        <button id="minimize-gravity-workspace" class="ghost" title="Keep results and place this workspace in the bottom tray">Minimize —</button>
         <button id="close-gravity-workspace" class="ghost">Close</button>
       </span>
     </div>
     <div id="gravity-workspace-grid" class="gravity-workspace-grid" data-layout="triple">
-      <section class="gravity-result-pane gravity-map-pane"><header>Gravity map</header><canvas id="gravity-map-canvas"></canvas></section>
+      <section class="gravity-result-pane gravity-map-pane">
+        <header id="gravity-map-pane-title">Gravity map</header>
+        <div class="gravity-workspace-map-tools" aria-label="Gravity interpretation tools">
+          <button id="gravity-draw-section" class="ghost" type="button" aria-pressed="false" title="Draw a straight or curved section by clicking points on the gravity map">⌁ Draw section</button>
+          <button id="gravity-edit-contours" class="ghost" type="button" aria-pressed="false" title="Select a feature and drag its vertices on the gravity map">◇ Edit contours</button>
+          <button id="toggle-gravity-feature-contours" class="ghost" type="button" aria-pressed="false" title="Show feature boundaries without geological fills or edit handles">◎ Contours only</button>
+        </div>
+        <canvas id="gravity-map-canvas"></canvas>
+      </section>
       <section class="gravity-result-pane gravity-3d-pane"><header>3D density model + anomaly surface</header><canvas id="gravity-3d-canvas"></canvas></section>
-      <section class="gravity-result-pane gravity-section-pane"><header>Section / model profile</header><canvas id="gravity-section-canvas"></canvas></section>
+      <section class="gravity-result-pane gravity-section-pane"><header id="gravity-section-pane-title">Section / model profile</header><canvas id="gravity-section-canvas"></canvas></section>
     </div>
   </dialog>
+
+  <div id="workspace-dock" class="workspace-dock hidden" aria-label="Minimized workspaces" aria-hidden="true">
+    <button id="restore-gravity-workspace" class="workspace-dock-item" title="Reopen the gravity results workspace">
+      <span class="workspace-dock-grip" aria-hidden="true"></span>
+      <span class="workspace-dock-icon" aria-hidden="true">◫</span>
+      <span><strong>Gravity results</strong><small>Computed views preserved</small></span>
+      <span class="workspace-dock-restore" aria-hidden="true">↗</span>
+    </button>
+  </div>
 
   <dialog id="examples-dialog" class="examples-dialog">
     <div class="dialog-header">
@@ -734,6 +923,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="app.js?v=49"></script>
+  <script type="module" src="app.js?v=69"></script>
 </body>
 </html>

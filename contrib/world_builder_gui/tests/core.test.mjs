@@ -2,10 +2,83 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_SETTINGS, createFeature, buildWorldBuilder, buildGrid, buildVtp,
+  buildLegacyVtk, buildObj, buildGeoJson, buildGeometryCsv,
   connectFeatures, validateProject, importWorldBuilder, applyGridConfig,
   geologicalLayerPreset, createPlacementPoints
 } from "../core.js";
+import { PLANETARY_BODY_CATALOG, planetaryBodyById, searchPlanetaryBodies } from "../planetary-catalog.mjs";
+
+test("planetary library supplies GWB-ready spherical constants and searchable datasets", () => {
+  const mars = planetaryBodyById("mars");
+  assert.equal(mars.radius, 3389500);
+  assert.equal(mars.gravity, 3.71);
+  assert.ok(mars.fields.includes("MOLA topography"));
+  assert.ok(PLANETARY_BODY_CATALOG.length >= 10);
+  assert.deepEqual(searchPlanetaryBodies("ice shell").map(body => body.id), ["europa"]);
+});
 import { buildSubmachineRequest, extractSubmachineImageUrl } from "../submachine.mjs";
+import { LITHOSPHERE_CATALOG, searchLithosphereModels } from "../lithosphere-catalog.mjs";
+import { parseLithosphereTable, regularLithosphereGrid, remapGeographicGridToCartesian } from "../lithosphere-table.mjs";
+
+test("catalogues downloadable lithosphere models and searches their physical fields", () => {
+  assert.ok(LITHOSPHERE_CATALOG.length >= 7);
+  assert.ok(searchLithosphereModels("density").some(model => model.id === "litho1"));
+  assert.ok(searchLithosphereModels("temperature").some(model => model.id === "lithoref18"));
+  assert.equal(LITHOSPHERE_CATALOG.find(model => model.id === "litho1").availability, "builtin");
+});
+
+test("parses and grids a local longitude-latitude lithosphere table", () => {
+  const table = parseLithosphereTable([
+    "longitude,latitude,moho_depth,density",
+    "10,45,30,2800", "20,45,32,2820",
+    "10,40,34,2840", "20,40,36,2860"
+  ].join("\n"));
+  assert.deepEqual(table.fields, ["moho_depth", "density"]);
+  const grid = regularLithosphereGrid(table, "moho_depth");
+  assert.equal(grid.nx, 2);
+  assert.equal(grid.ny, 2);
+  assert.deepEqual(grid.values, [30, 32, 34, 36]);
+  assert.equal(grid.min, 30);
+  assert.equal(grid.max, 36);
+});
+
+test("resamples a geographic lithosphere field into a Cartesian model domain", () => {
+  const grid = regularLithosphereGrid(parseLithosphereTable([
+    "longitude,latitude,density",
+    "10,45,2800", "20,45,2820",
+    "10,40,2840", "20,40,2860"
+  ].join("\n")), "density");
+  const mapped = remapGeographicGridToCartesian(
+    grid,
+    { west: 10, east: 20, south: 40, north: 45 },
+    { west: 0, east: 1000000, south: 0, north: 600000 }
+  );
+  assert.deepEqual([mapped.west, mapped.east, mapped.south, mapped.north], [0, 1000000, 0, 600000]);
+  assert.deepEqual(mapped.geographicBounds, { west: 10, east: 20, south: 40, north: 45 });
+  assert.equal(mapped.coordinateMapping, "equirectangular-to-cartesian");
+  assert.deepEqual(mapped.values, [2800, 2820, 2840, 2860]);
+});
+
+test("parses EarthScope GeoCSV pipe delimiters and metadata", () => {
+  const table = parseLithosphereTable([
+    "# dataset: GeoCSV2.0", "# delimiter: |",
+    "latitude|longitude|mantle_rho|mantle_top",
+    "45|10|3.31|-34", "45|20|3.32|-35",
+    "40|10|3.33|-36", "40|20|3.34|-37"
+  ].join("\n"));
+  assert.deepEqual(table.fields, ["mantle_rho", "mantle_top"]);
+  assert.deepEqual(regularLithosphereGrid(table, "mantle_rho").values, [3.31, 3.32, 3.33, 3.34]);
+});
+
+test("exports GWB bundled LITHO1.0 depth and topography surface references", () => {
+  const plate = createFeature("continental plate", 10, 20, 0);
+  plate.depthReferences = { min: "Litho1.0: crust 1 top", max: "Litho1.0: lithosphere bottom" };
+  plate.lithoTopographyReference = "Litho1.0: ice top";
+  const feature = buildWorldBuilder({ ...DEFAULT_SETTINGS, coordinateSystem: "spherical" }, [plate]).features[0];
+  assert.equal(feature["min depth"], "Litho1.0: crust 1 top");
+  assert.equal(feature["max depth"], "Litho1.0: lithosphere bottom");
+  assert.deepEqual(feature["topography models"], [{ model: "depth surface", topography: "Litho1.0: ice top" }]);
+});
 
 test("builds a minimal World Builder document", () => {
   const plate = createFeature("continental plate", 300000, 150000, 0);
@@ -65,6 +138,28 @@ test("exports website-ready VTK XML PolyData with physical arrays", () => {
   assert.match(vtp, /Name="Density"/);
   assert.match(vtp, /Name="Composition"/);
   assert.match(vtp, /Name="FeatureId"/);
+});
+
+test("exports legacy VTK, OBJ, GeoJSON and attribute CSV geometry", () => {
+  const plate = createFeature("continental plate", 300000, 150000, 0);
+  plate.name = "Test plate";
+  plate.referenceDensity = 2825;
+  const legacy = buildLegacyVtk(DEFAULT_SETTINGS, [plate]);
+  assert.match(legacy, /# vtk DataFile Version 3.0/);
+  assert.match(legacy, /DATASET POLYDATA/);
+  assert.match(legacy, /SCALARS Temperature float 1/);
+  assert.match(legacy, /SCALARS Density float 1/);
+  const obj = buildObj(DEFAULT_SETTINGS, [plate]);
+  assert.match(obj, /^v /m);
+  assert.match(obj, /^f /m);
+  assert.match(obj, /g Test_plate/);
+  const geojson = JSON.parse(buildGeoJson(DEFAULT_SETTINGS, [plate]));
+  assert.equal(geojson.type, "FeatureCollection");
+  assert.equal(geojson.features[0].geometry.type, "Polygon");
+  assert.equal(geojson.features[0].properties.densityKgM3, 2825);
+  const csv = buildGeometryCsv(DEFAULT_SETTINGS, [plate]);
+  assert.match(csv, /point_id,x,y,z,temperature_k,density_kg_m3/);
+  assert.match(csv, /"Test plate"/);
 });
 
 test("connecting features creates one shared coordinate", () => {

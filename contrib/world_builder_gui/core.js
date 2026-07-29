@@ -31,7 +31,12 @@ export const DEFAULT_SETTINGS = {
   integrationPoints: 100,
   referenceProfileX: 0,
   referenceProfileY: 0,
-  radius: 6371000
+  planetaryBody: "earth",
+  radius: 6371000,
+  geographicSourceWest: -20,
+  geographicSourceEast: 20,
+  geographicSourceSouth: -15,
+  geographicSourceNorth: 15
 };
 
 const roundCoordinate = value => Number(Number(value).toFixed(6));
@@ -152,18 +157,28 @@ function inferLayers(rawFeature, created) {
   const temperatures = rawFeature["temperature models"] || [];
   if (compositions.length < 2 && temperatures.length < 2) return [];
   const source = compositions.length >= temperatures.length ? compositions : temperatures;
-  return source.map((model, index) => ({
-    name: model.name || `Layer ${index + 1}`,
-    minDepth: Number(model[minKey] ?? (index ? source[index - 1]?.[maxKey] : 0) ?? 0),
-    maxDepth: Number(model[maxKey] ?? (rawFeature.model === "subducting plate" || rawFeature.model === "fault"
+  return source.map((model, index) => {
+    const minValue = model[minKey] ?? (index ? source[index - 1]?.[maxKey] : 0) ?? 0;
+    const maxValue = model[maxKey] ?? (rawFeature.model === "subducting plate" || rawFeature.model === "fault"
       ? created.thickness
-      : rawFeature["max depth"] ?? created.maxDepth)),
-    composition: Number(compositions[index]?.compositions?.[0] ?? created.composition + index),
-    temperature: Number(temperatures[index]?.temperature
-      ?? temperatures[index]?.["top temperature"]
-      ?? created.temperature),
-    density: Number(created.referenceDensity)
-  }));
+      : rawFeature["max depth"] ?? created.maxDepth);
+    const minReference = typeof minValue === "string" && minValue.trim().startsWith("Litho1.0") ? minValue.trim() : null;
+    const maxReference = typeof maxValue === "string" && maxValue.trim().startsWith("Litho1.0") ? maxValue.trim() : null;
+    return {
+      name: model.name || `Layer ${index + 1}`,
+      minDepth: Number.isFinite(Number(minValue)) ? Number(minValue) : index * 10000,
+      maxDepth: Number.isFinite(Number(maxValue)) ? Number(maxValue) : (index + 1) * 10000,
+      depthReferences: {
+        ...(minReference ? { min: minReference } : {}),
+        ...(maxReference ? { max: maxReference } : {})
+      },
+      composition: Number(compositions[index]?.compositions?.[0] ?? created.composition + index),
+      temperature: Number(temperatures[index]?.temperature
+        ?? temperatures[index]?.["top temperature"]
+        ?? created.temperature),
+      density: Number(created.referenceDensity)
+    };
+  });
 }
 
 export function importFeature(rawFeature, index = 0) {
@@ -176,13 +191,23 @@ export function importFeature(rawFeature, index = 0) {
   const firstComposition = rawFeature["composition models"]?.[0];
   const firstDensity = rawFeature["density models"]?.[0];
   const firstSegment = rawFeature.segments?.[0];
+  const rawMinDepth = rawFeature["min depth"];
+  const rawMaxDepth = rawFeature["max depth"];
+  const lithoReference = value => typeof value === "string" && value.trim().startsWith("Litho1.0") ? value.trim() : null;
+  const lithoTopography = rawFeature["topography models"]?.find(model =>
+    model.model === "depth surface" && lithoReference(model.topography))?.topography;
   const imported = {
     ...created,
     raw: clone(rawFeature),
     name: rawFeature.name || created.name,
     points: clone(coordinates),
-    minDepth: rawFeature["min depth"] ?? created.minDepth,
-    maxDepth: rawFeature["max depth"] ?? created.maxDepth,
+    minDepth: Number.isFinite(Number(rawMinDepth)) ? Number(rawMinDepth) : created.minDepth,
+    maxDepth: Number.isFinite(Number(rawMaxDepth)) ? Number(rawMaxDepth) : created.maxDepth,
+    depthReferences: {
+      ...(lithoReference(rawMinDepth) ? { min: lithoReference(rawMinDepth) } : {}),
+      ...(lithoReference(rawMaxDepth) ? { max: lithoReference(rawMaxDepth) } : {})
+    },
+    lithoTopographyReference: lithoTopography || null,
     dipPoint: clone(rawFeature["dip point"] || created.dipPoint),
     segmentLength: firstSegment?.length ?? created.segmentLength,
     thickness: firstSegment?.thickness?.[0] ?? created.thickness,
@@ -228,20 +253,20 @@ function layeredModels(feature) {
   return {
     temperatures: layers.map(layer => ({
       model: "uniform",
-      [minKey]: Number(layer.minDepth),
-      [maxKey]: Number(layer.maxDepth),
+      [minKey]: layer.depthReferences?.min || Number(layer.minDepth),
+      [maxKey]: layer.depthReferences?.max || Number(layer.maxDepth),
       temperature: Number(layer.temperature)
     })),
     compositions: layers.map(layer => ({
       model: "uniform",
-      [minKey]: Number(layer.minDepth),
-      [maxKey]: Number(layer.maxDepth),
+      [minKey]: layer.depthReferences?.min || Number(layer.minDepth),
+      [maxKey]: layer.depthReferences?.max || Number(layer.maxDepth),
       compositions: [Number(layer.composition)]
     })),
     densities: layers.map(layer => ({
       model: "uniform",
-      [minKey]: Number(layer.minDepth),
-      [maxKey]: Number(layer.maxDepth),
+      [minKey]: layer.depthReferences?.min || Number(layer.minDepth),
+      [maxKey]: layer.depthReferences?.max || Number(layer.maxDepth),
       compositions: [Number(layer.composition)],
       operation: feature.densityOperation || "replace"
     }))
@@ -254,8 +279,8 @@ export function featureToWorldBuilder(feature) {
   output.name = feature.name;
   output.coordinates = feature.points.map(point => point.map(roundCoordinate));
 
-  output["min depth"] = Number(feature.minDepth);
-  output["max depth"] = Number(feature.maxDepth);
+  output["min depth"] = feature.depthReferences?.min || Number(feature.minDepth);
+  output["max depth"] = feature.depthReferences?.max || Number(feature.maxDepth);
 
   if (feature.model === "subducting plate" || feature.model === "fault") {
     output["dip point"] = feature.dipPoint.map(roundCoordinate);
@@ -308,6 +333,9 @@ export function featureToWorldBuilder(feature) {
   if (Array.isArray(feature.generatedTopographyModels)) {
     if (feature.generatedTopographyModels.length) output["topography models"] = clone(feature.generatedTopographyModels);
     else delete output["topography models"];
+  }
+  if (feature.lithoTopographyReference) {
+    output["topography models"] = [{ model: "depth surface", topography: feature.lithoTopographyReference }];
   }
   return output;
 }
@@ -451,7 +479,7 @@ export function buildGrid(settings) {
   return `${lines.join("\n")}\n`;
 }
 
-export function buildVtp(settings, features) {
+function buildGeometryDataset(settings, features) {
   const points = [];
   const temperature = [];
   const density = [];
@@ -569,29 +597,143 @@ export function buildVtp(settings, features) {
       .forEach(indices => addPoly(indices.map(index => vertices[index])));
   });
 
+  return {
+    points, temperature, density, composition, featureIds, modelTypes,
+    lineConnectivity, lineOffsets, polyConnectivity, polyOffsets
+  };
+}
+
+function cellsFromOffsets(connectivity, offsets) {
+  let start = 0;
+  return offsets.map(offset => {
+    const cell = connectivity.slice(start, offset);
+    start = offset;
+    return cell;
+  });
+}
+
+export function buildVtp(settings, features) {
+  const data = buildGeometryDataset(settings, features);
   const array = values => values.map(value => Number(value).toPrecision(9)).join(" ");
   const integers = values => values.join(" ");
   return `<?xml version="1.0"?>
 <VTKFile type="PolyData" version="1.0" byte_order="LittleEndian">
   <PolyData>
-    <Piece NumberOfPoints="${points.length / 3}" NumberOfVerts="0" NumberOfLines="${lineOffsets.length}" NumberOfStrips="0" NumberOfPolys="${polyOffsets.length}">
+    <Piece NumberOfPoints="${data.points.length / 3}" NumberOfVerts="0" NumberOfLines="${data.lineOffsets.length}" NumberOfStrips="0" NumberOfPolys="${data.polyOffsets.length}">
       <PointData Scalars="Temperature">
-        <DataArray type="Float32" Name="Temperature" NumberOfComponents="1" format="ascii">${array(temperature)}</DataArray>
-        <DataArray type="Float32" Name="Density" NumberOfComponents="1" format="ascii">${array(density)}</DataArray>
-        <DataArray type="Int32" Name="Composition" NumberOfComponents="1" format="ascii">${integers(composition.map(Math.round))}</DataArray>
-        <DataArray type="Int32" Name="FeatureId" NumberOfComponents="1" format="ascii">${integers(featureIds)}</DataArray>
-        <DataArray type="Int32" Name="ModelType" NumberOfComponents="1" format="ascii">${integers(modelTypes)}</DataArray>
+        <DataArray type="Float32" Name="Temperature" NumberOfComponents="1" format="ascii">${array(data.temperature)}</DataArray>
+        <DataArray type="Float32" Name="Density" NumberOfComponents="1" format="ascii">${array(data.density)}</DataArray>
+        <DataArray type="Int32" Name="Composition" NumberOfComponents="1" format="ascii">${integers(data.composition.map(Math.round))}</DataArray>
+        <DataArray type="Int32" Name="FeatureId" NumberOfComponents="1" format="ascii">${integers(data.featureIds)}</DataArray>
+        <DataArray type="Int32" Name="ModelType" NumberOfComponents="1" format="ascii">${integers(data.modelTypes)}</DataArray>
       </PointData>
       <CellData/>
-      <Points><DataArray type="Float64" Name="Points" NumberOfComponents="3" format="ascii">${array(points)}</DataArray></Points>
+      <Points><DataArray type="Float64" Name="Points" NumberOfComponents="3" format="ascii">${array(data.points)}</DataArray></Points>
       <Verts><DataArray type="Int32" Name="connectivity" format="ascii"></DataArray><DataArray type="Int32" Name="offsets" format="ascii"></DataArray></Verts>
-      <Lines><DataArray type="Int32" Name="connectivity" format="ascii">${integers(lineConnectivity)}</DataArray><DataArray type="Int32" Name="offsets" format="ascii">${integers(lineOffsets)}</DataArray></Lines>
+      <Lines><DataArray type="Int32" Name="connectivity" format="ascii">${integers(data.lineConnectivity)}</DataArray><DataArray type="Int32" Name="offsets" format="ascii">${integers(data.lineOffsets)}</DataArray></Lines>
       <Strips><DataArray type="Int32" Name="connectivity" format="ascii"></DataArray><DataArray type="Int32" Name="offsets" format="ascii"></DataArray></Strips>
-      <Polys><DataArray type="Int32" Name="connectivity" format="ascii">${integers(polyConnectivity)}</DataArray><DataArray type="Int32" Name="offsets" format="ascii">${integers(polyOffsets)}</DataArray></Polys>
+      <Polys><DataArray type="Int32" Name="connectivity" format="ascii">${integers(data.polyConnectivity)}</DataArray><DataArray type="Int32" Name="offsets" format="ascii">${integers(data.polyOffsets)}</DataArray></Polys>
     </Piece>
   </PolyData>
 </VTKFile>
 `;
+}
+
+export function buildLegacyVtk(settings, features) {
+  const data = buildGeometryDataset(settings, features);
+  const pointCount = data.points.length / 3;
+  const lines = cellsFromOffsets(data.lineConnectivity, data.lineOffsets);
+  const polys = cellsFromOffsets(data.polyConnectivity, data.polyOffsets);
+  const cellBlock = cells => cells.map(cell => `${cell.length} ${cell.join(" ")}`).join("\n");
+  const scalar = (name, type, values) => [
+    `SCALARS ${name} ${type} 1`, "LOOKUP_TABLE default", ...values.map(value => String(value))
+  ].join("\n");
+  return [
+    "# vtk DataFile Version 3.0",
+    "Geodynamic World Builder Visual Builder geometry",
+    "ASCII",
+    "DATASET POLYDATA",
+    `POINTS ${pointCount} double`,
+    ...Array.from({ length: pointCount }, (_, index) => data.points.slice(index * 3, index * 3 + 3).join(" ")),
+    `LINES ${lines.length} ${lines.reduce((sum, cell) => sum + cell.length + 1, 0)}`,
+    cellBlock(lines),
+    `POLYGONS ${polys.length} ${polys.reduce((sum, cell) => sum + cell.length + 1, 0)}`,
+    cellBlock(polys),
+    `POINT_DATA ${pointCount}`,
+    scalar("Temperature", "float", data.temperature),
+    scalar("Density", "float", data.density),
+    scalar("Composition", "int", data.composition.map(Math.round)),
+    scalar("FeatureId", "int", data.featureIds),
+    scalar("ModelType", "int", data.modelTypes),
+    ""
+  ].join("\n");
+}
+
+export function buildObj(settings, features) {
+  const data = buildGeometryDataset(settings, features);
+  const lines = cellsFromOffsets(data.lineConnectivity, data.lineOffsets);
+  const polys = cellsFromOffsets(data.polyConnectivity, data.polyOffsets);
+  const featureName = id => String(features[id]?.name || `feature_${id}`)
+    .replace(/[^a-zA-Z0-9_.-]+/g, "_");
+  const output = [
+    "# Geodynamic World Builder Visual Builder",
+    "# OBJ stores geometry; use VTP or VTK to preserve numerical point arrays."
+  ];
+  for (let index = 0; index < data.points.length; index += 3) {
+    output.push(`v ${data.points[index]} ${data.points[index + 1]} ${data.points[index + 2]}`);
+  }
+  [...lines.map(cell => ({ kind: "l", cell })), ...polys.map(cell => ({ kind: "f", cell }))]
+    .forEach(({ kind, cell }) => {
+      const featureId = data.featureIds[cell[0]] ?? -1;
+      output.push(`g ${featureName(featureId)}`);
+      output.push(`${kind} ${cell.map(point => point + 1).join(" ")}`);
+    });
+  return `${output.join("\n")}\n`;
+}
+
+export function buildGeometryCsv(settings, features) {
+  const data = buildGeometryDataset(settings, features);
+  const rows = ["point_id,x,y,z,temperature_k,density_kg_m3,composition,feature_id,feature_name,model_type"];
+  const quote = value => `"${String(value ?? "").replaceAll("\"", "\"\"")}"`;
+  for (let index = 0; index < data.points.length / 3; index++) {
+    rows.push([
+      index, data.points[index * 3], data.points[index * 3 + 1], data.points[index * 3 + 2],
+      data.temperature[index], data.density[index], Math.round(data.composition[index]),
+      data.featureIds[index], quote(features[data.featureIds[index]]?.name), data.modelTypes[index]
+    ].join(","));
+  }
+  return `${rows.join("\n")}\n`;
+}
+
+export function buildGeoJson(settings, features) {
+  const featureTemperature = feature => Number(feature.temperature ?? settings.mantleTemperature);
+  const featureDensity = feature => Number(feature.referenceDensity ?? settings.backgroundDensity);
+  const output = features.filter(feature => FEATURE_TYPES[feature.model] && feature.points?.length).map((feature, featureIndex) => {
+    const geometryType = FEATURE_TYPES[feature.model].geometry;
+    const coordinates = feature.points.map(point => [Number(point[0]), Number(point[1])]);
+    return {
+      type: "Feature",
+      id: feature.id || featureIndex,
+      properties: {
+        name: feature.name, model: feature.model, featureId: featureIndex,
+        minDepthM: Number(feature.minDepth || 0), maxDepthM: Number(feature.maxDepth || 0),
+        temperatureK: featureTemperature(feature), densityKgM3: featureDensity(feature),
+        composition: Number(feature.composition || 0),
+        coordinateSystem: settings.coordinateSystem
+      },
+      geometry: geometryType === "point"
+        ? { type: "Point", coordinates: coordinates[0] }
+        : geometryType === "line"
+          ? { type: "LineString", coordinates }
+          : { type: "Polygon", coordinates: [[...coordinates, coordinates[0]]] }
+    };
+  });
+  return `${JSON.stringify({
+    type: "FeatureCollection",
+    name: "Geodynamic World Builder Visual Builder",
+    coordinateSystem: settings.coordinateSystem,
+    features: output
+  }, null, 2)}\n`;
 }
 
 export function connectFeatures(source, target) {
