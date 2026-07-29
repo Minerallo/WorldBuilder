@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Visual model builder for the Geodynamic World Builder">
+  <title>GWB Visual Builder</title>
+  <link rel="stylesheet" href="styles.css?v=34">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img class="brand-logo" src="/assets/gwb-logo.png?v=5" alt="Geodynamic World Builder logo" width="42" height="42">
+      <div><strong>Visual Builder</strong><small>Geodynamic World Builder</small></div>
+    </div>
+    <div class="top-actions">
+      <nav class="project-links" aria-label="GWB project links">
+        <a href="https://gwb.readthedocs.io/" target="_blank" rel="noreferrer" title="Open the GWB manual">Manual ↗</a>
+        <a href="https://github.com/GeodynamicWorldBuilder/WorldBuilder/" target="_blank" rel="noreferrer" title="Open the GWB source repository">GitHub ↗</a>
+        <a href="https://geodynamicworldbuilder.github.io/" target="_blank" rel="noreferrer" title="Learn what the Geodynamic World Builder is">About GWB ↗</a>
+        <a href="https://matrix.to/#/!vhukRUGUINnZOIutoQ:matrix.org?via=matrix.org" target="_blank" rel="noreferrer" title="Join the GWB community on Element / Matrix">Element chat ↗</a>
+        <a href="https://chatgpt.com/g/g-697288e8f6d08191802a41c65fca2cb9-aspect-software-guide" target="_blank" rel="noreferrer" title="Ask the ASPECT Software Guide GPT about ASPECT and integrated GWB workflows">ASPECT + GWB GPT ↗</a>
+      </nav>
+      <span id="save-state" class="save-state">Saved locally</span>
+      <div class="history-controls" aria-label="Edit history">
+        <button id="undo-action" class="ghost" title="Previous model state (Ctrl/Cmd+Z)" aria-label="Previous model state" aria-keyshortcuts="Control+Z Meta+Z" disabled><span aria-hidden="true">←</span><span class="history-label">Previous</span></button>
+        <button id="redo-action" class="ghost" title="Forward to the next model state (Ctrl/Cmd+Shift+Z)" aria-label="Forward to next model state" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled><span class="history-label">Forward</span><span aria-hidden="true">→</span></button>
+      </div>
+      <button id="new-project" class="ghost">New</button>
+      <button id="open-examples" class="ghost">Examples</button>
+      <button id="save-project-state" class="ghost" title="Download a complete editable Visual Builder project">Save project</button>
+      <label class="button ghost" for="open-project-state" title="Reopen a saved Visual Builder project">Open project</label>
+      <input id="open-project-state" type="file" accept=".gwbproject,.json,application/json" hidden>
+      <label class="button ghost" for="import-file">Import</label>
+      <input id="import-file" type="file" accept=".wb,.json" hidden>
+      <button id="download-wb" class="primary">Export .wb</button>
+      <button id="download-grid" class="ghost">Export .grid</button>
+      <button id="download-vtp" class="ghost" title="Export a vtk.js-compatible XML PolyData file">Export VTK.js</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="palette">
+      <div class="palette-tabs">
+        <button class="active" data-palette-tab="features">Features</button>
+        <button data-palette-tab="topography">Topography</button>
+        <button data-palette-tab="layers">Layers</button>
+      </div>
+      <div id="features-palette-pane">
+        <div class="section-heading">
+          <span>Features</span><small>Click or drag</small>
+        </div>
+        <div class="placement-shape-picker">
+          <div class="placement-shape-title"><strong>Placement shape</strong><small>Applied before dragging</small></div>
+          <div class="form-grid">
+            <label>Area footprint
+              <select id="area-placement-shape">
+                <option value="rectangle">Rectangle</option>
+                <option value="ellipse">Ellipse · 16 vertices</option>
+                <option value="wedge">Wedge / triangle</option>
+                <option value="irregular">Irregular polygon</option>
+              </select>
+            </label>
+            <label>Line trace
+              <select id="line-placement-shape">
+                <option value="straight">Straight</option>
+                <option value="curved">Curved · 7 vertices</option>
+                <option value="segmented">Segmented / zigzag</option>
+              </select>
+            </label>
+          </div>
+          <div id="placement-shape-preview" class="placement-shape-preview" aria-hidden="true"></div>
+        </div>
+        <div id="feature-palette" class="feature-palette"></div>
+        <div class="section-heading navigator-heading">
+          <span>Model</span><small id="navigator-count">0 items</small>
+        </div>
+        <div id="model-navigator" class="model-navigator">
+          <div class="navigator-empty">Added and imported features appear here.</div>
+        </div>
+        <div class="help-card">
+          <strong>Build spatially</strong>
+          <p>Drag a feature, move it on the grid, then edit its geometry and physical parameters.</p>
+        </div>
+      </div>
+      <div id="topography-palette-pane" class="hidden">
+        <div class="section-heading">
+          <span>Surface field</span><small id="topography-status-mini">empty</small>
+        </div>
+        <div class="topography-source">
+          <small>PROCEDURAL TERRAIN</small>
+          <label>Preset
+            <select id="terrain-preset">
+              <option value="mountains">Mountain range</option>
+              <option value="rift">Rift valley</option>
+              <option value="plateau">Plateau</option>
+              <option value="islands">Volcanic islands</option>
+              <option value="noise">Perlin-style noise</option>
+            </select>
+          </label>
+          <div class="form-grid">
+            <label>Amplitude (m)<input id="terrain-amplitude" type="number" value="3500" min="0"></label>
+            <label>Roughness<input id="terrain-roughness" type="number" value="0.55" min="0.05" max="1" step="0.05"></label>
+            <label>Scale<input id="terrain-scale" type="number" value="3" min="0.2" step="0.2"></label>
+            <label>Seed<input id="terrain-seed" type="number" value="42" step="1"></label>
+          </div>
+          <button id="generate-terrain" class="wide primary">Generate terrain</button>
+        </div>
+        <div class="topography-source">
+          <small>SCULPT</small>
+          <div class="terrain-tool-grid">
+            <button data-terrain-tool="raise">＋ Elevate</button>
+            <button data-terrain-tool="lower">− Depress</button>
+            <button data-terrain-tool="smooth">≈ Smooth</button>
+            <button data-terrain-tool="select">▱ Select area</button>
+          </div>
+          <div class="form-grid">
+            <label>Brush radius<input id="terrain-brush" type="range" min="1" max="12" value="4"></label>
+            <label>Strength (m)<input id="terrain-strength" type="number" min="1" value="250"></label>
+          </div>
+          <div class="terrain-selection-actions">
+            <button id="selection-uplift">Uplift selection</button>
+            <button id="selection-depress">Depress selection</button>
+          </div>
+          <p class="shape-help">Press and drag to sculpt. Select area uses two clicks, then applies the current strength.</p>
+        </div>
+        <div class="topography-source">
+          <small>REAL DATA / IMPORT</small>
+          <button id="load-etopo" class="wide">Load NOAA ETOPO relief</button>
+          <button id="import-topography" class="wide ghost">Import PaleoDEM / elevation file</button>
+          <input id="topography-file" type="file" accept=".asc,.xyz,.csv,.json,.png,.jpg,.jpeg" hidden>
+          <p id="topography-source-note" class="shape-help">ETOPO uses the current spherical longitude/latitude bounds. PaleoDEM, ASCII grid, XYZ/CSV, JSON and grayscale rasters can be edited numerically.</p>
+        </div>
+        <div class="topography-source paleogeography-source">
+          <div class="source-title-row">
+            <small>PALEOGEOGRAPHY · EARTHBYTE/GPLATES</small>
+            <span id="paleo-connection" class="source-badge">not loaded</span>
+          </div>
+          <label>Plate reconstruction model
+            <select id="paleo-model">
+              <option value="MULLER2022" data-max-age="1000">Müller 2022 · 0–1000 Ma</option>
+              <option value="ZAHIROVIC2022" data-max-age="410">Zahirovic 2022 · 0–410 Ma</option>
+              <option value="MERDITH2021" data-max-age="1000">Merdith 2021 · 0–1000 Ma</option>
+              <option value="CLENNETT2020" data-max-age="170">Clennett 2020 · 0–170 Ma</option>
+              <option value="MULLER2019" data-max-age="250">Müller 2019 · 0–250 Ma</option>
+              <option value="MULLER2016" data-max-age="230">Müller 2016 · 0–230 Ma</option>
+              <option value="MATTHEWS2016" data-max-age="410">Matthews 2016 · 0–410 Ma</option>
+              <option value="SETON2012" data-max-age="200">Seton 2012 · 0–200 Ma</option>
+              <option value="GOLONKA" data-max-age="550">Golonka · 0–550 Ma</option>
+              <option value="PALEOMAP" data-max-age="1100">PALEOMAP · 0–1100 Ma</option>
+              <option value="RODINIA" data-max-age="1100" data-min-age="540">Rodinia · 540–1100 Ma</option>
+            </select>
+          </label>
+          <div class="paleo-age-row">
+            <label>Age (Ma)<input id="paleo-age" type="number" min="0" max="1000" value="100" step="1"></label>
+            <input id="paleo-age-slider" aria-label="Paleogeographic age" type="range" min="0" max="1000" value="100" step="1">
+          </div>
+          <div class="paleo-layer-grid">
+            <label><input id="paleo-coastlines" type="checkbox" checked> Continents</label>
+            <label><input id="paleo-subduction" type="checkbox" checked> Subduction</label>
+            <label><input id="paleo-boundaries" type="checkbox" checked> Plate boundaries</label>
+          </div>
+          <label>Reference frame
+            <select id="paleo-anchor">
+              <option value="0">Model mantle frame · plate 0</option>
+              <option value="1">Paleomagnetic frame · plate 1</option>
+            </select>
+          </label>
+          <button id="load-paleogeography" class="wide primary">Load reconstruction</button>
+          <button id="load-local-gplates" class="wide ghost">Load bundled GWB contribution · 1000 Ma</button>
+          <div class="paleo-actions">
+            <button id="build-paleo-relief">Build editable relief proxy</button>
+            <button id="convert-paleo-features">Convert vectors to features</button>
+          </div>
+          <label class="checkbox-row"><input id="show-paleogeography" type="checkbox" checked> Show reconstruction on plan view</label>
+          <p id="paleo-status" class="shape-help">Choose an age and model. Imported PaleoDEM grids remain the source of quantitative elevation; the relief proxy is a sketching aid.</p>
+        </div>
+        <div class="topography-source density-source">
+          <small>TOPOGRAPHY MODE · DENSITY / ISOSTASY</small>
+          <label>Surface treatment
+            <select id="topography-mode">
+              <option value="none">No topography</option>
+              <option value="terrain">Terrain field / feature surfaces</option>
+              <option value="isostatic">Isostatic topography from density</option>
+            </select>
+          </label>
+          <p id="topography-mode-note" class="shape-help">Terrain fields are converted to per-feature GWB depth surfaces.</p>
+          <div id="isostasy-controls" class="isostasy-controls hidden">
+            <div class="form-grid">
+              <label>Background density (kg/m³)<input id="background-density" type="number" min="0" step="10"></label>
+              <label>Gravity (m/s²)<input id="gravity-magnitude" type="number" min="0" step="0.01"></label>
+              <label>Compensation depth (km)<input id="compensation-depth" type="number" min="1" step="10"></label>
+              <label>Integration points<input id="integration-points" type="number" min="2" step="1"></label>
+              <label>Reference X / longitude<input id="reference-profile-x" type="number" step="0.1"></label>
+              <label>Reference Y / latitude<input id="reference-profile-y" type="number" step="0.1"></label>
+            </div>
+            <p class="shape-help">The reference column defines compensation pressure. Feature density models use composition reference densities configured in each feature.</p>
+          </div>
+        </div>
+        <div class="topography-source">
+          <small>DISPLAY / OUTPUT</small>
+          <label>Opacity<input id="terrain-opacity" type="range" min="0" max="100" value="70"></label>
+          <label class="checkbox-row"><input id="terrain-hillshade" type="checkbox" checked> Hillshade</label>
+          <label class="checkbox-row"><input id="apply-topography-features" type="checkbox" checked> Convert overlapping terrain to GWB plate features</label>
+          <p id="topography-conversion-status" class="shape-help">Continental and oceanic plates receive reusable GWB depth-surface topography models.</p>
+          <div class="terrain-selection-actions">
+            <button id="clear-topography" class="ghost">Clear</button>
+            <button id="export-topography" class="ghost">Export XYZ</button>
+          </div>
+          <div id="topography-range" class="topography-range">No elevation field</div>
+        </div>
+      </div>
+      <div id="layers-palette-pane" class="hidden">
+        <div class="section-heading">
+          <span>Scene layers</span><small>Editor visibility</small>
+        </div>
+        <div class="scene-layer-list">
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="grid" checked><span class="layer-eye">◉</span><span><strong>Grid and axes</strong><small>Domain mesh and coordinates</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="features" checked><span class="layer-eye">◉</span><span><strong>Geological features</strong><small>All plates, faults and plumes</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="labels" checked><span class="layer-eye">◉</span><span><strong>Labels</strong><small>Names, temperature and dip text</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="connections" checked><span class="layer-eye">◉</span><span><strong>Connections</strong><small>Shared feature boundaries</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="slabs" checked><span class="layer-eye">◉</span><span><strong>Slab projections</strong><small>Plan and volume dip geometry</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="topography" checked><span class="layer-eye">◉</span><span><strong>Topography</strong><small>Elevation field and terrain mesh</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="paleogeography" checked><span class="layer-eye">◉</span><span><strong>Paleogeography</strong><small>Continents and plate boundaries</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="referenceMap" checked><span class="layer-eye">◉</span><span><strong>Reference imagery</strong><small>Map or tomography background</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="tomography" checked><span class="layer-eye">◉</span><span><strong>Numerical tomography</strong><small>Sampleable dVs scalar grid</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="gravity" checked><span class="layer-eye">◉</span><span><strong>Gravity anomaly</strong><small>Live Bouguer, free-air or residual preview</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="legend" checked><span class="layer-eye">◉</span><span><strong>Colour scales</strong><small>Elevation and temperature legends</small></span></label>
+        </div>
+        <div class="section-heading navigator-heading layer-feature-heading">
+          <span>Feature layers</span><small id="visible-layer-count">0 visible</small>
+        </div>
+        <div class="layer-visibility-actions">
+          <button id="show-all-layers" class="ghost">Show all</button>
+          <button id="hide-all-layers" class="ghost">Hide all</button>
+        </div>
+        <div class="layer-group-create">
+          <input id="new-layer-group-name" type="text" placeholder="Group name" maxlength="48">
+          <button id="create-layer-group" class="ghost">Create group</button>
+        </div>
+        <div id="feature-layer-list" class="feature-layer-list">
+          <div class="navigator-empty">Add features to control them independently.</div>
+        </div>
+        <p class="layer-visibility-note">Select features before creating a group to add them immediately. Visibility only changes the editor; hidden features remain in the generated <code>.wb</code> model.</p>
+      </div>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-toolbar">
+        <button id="toggle-palette-panel" class="icon-button panel-toggle" title="Show or hide the feature library ([)" aria-label="Toggle feature library" aria-keyshortcuts="[">☰</button>
+        <div class="segmented" aria-label="Editing tool">
+          <button data-tool="select" class="active" title="Select features; drag empty space for box selection; Ctrl/Cmd-click adds to the selection (V)" aria-keyshortcuts="V">Select</button>
+          <button data-tool="connect" title="Connect two feature boundaries (C)" aria-keyshortcuts="C">Connect</button>
+          <button data-tool="section" title="Draw a depth section (S)" aria-keyshortcuts="S">Draw section</button>
+        </div>
+        <button id="toggle-shape-editor" class="icon-button" aria-expanded="false">Shape editor</button>
+        <details class="toolbar-menu">
+          <summary>Data</summary>
+          <div class="toolbar-menu-content">
+            <small>DATA &amp; RESEARCH</small>
+            <button id="toggle-map-editor" class="icon-button" aria-expanded="false">Reference map</button>
+            <button id="toggle-tomography" class="icon-button tomography-button" aria-expanded="false">Tomography</button>
+            <button id="toggle-gravity" class="icon-button gravity-button" aria-expanded="false">Gravity</button>
+            <button id="toggle-research" class="icon-button research-button" aria-expanded="false">Research functions</button>
+          </div>
+        </details>
+        <details class="toolbar-menu">
+          <summary>Display</summary>
+          <div class="toolbar-menu-content">
+            <small>WORKSPACE VIEW</small>
+            <button id="toggle-appearance" class="icon-button" aria-expanded="false">Appearance</button>
+            <button id="toggle-color-editor" class="icon-button" aria-expanded="false">Color map editor</button>
+            <button id="toggle-split-view" class="icon-button" title="Split the viewport for side-by-side comparison">Split view</button>
+            <button id="link-cameras" class="icon-button hidden" title="Keep zoom, rotation and pan synchronized" aria-pressed="true">🔗 Cameras</button>
+            <button id="export-screenshot" class="icon-button" title="Save the current viewport layout as a PNG">📷 Screenshot PNG</button>
+          </div>
+        </details>
+        <input id="reference-image-file" type="file" accept=".png,.jpg,.jpeg,.webp" hidden>
+        <div class="segmented view-switcher" aria-label="Model view">
+          <button data-view="plan" class="active" title="Plan view (1)" aria-keyshortcuts="1">Plan</button>
+          <button data-view="three-d" title="3D view (2)" aria-keyshortcuts="2">3D</button>
+          <button data-view="section" title="Depth section (3)" aria-keyshortcuts="3">Depth section</button>
+        </div>
+        <button id="fit-view" class="icon-button" title="Fit model to view (F)" aria-keyshortcuts="F">Fit view</button>
+        <button id="toggle-inspector-panel" class="icon-button panel-toggle" title="Show or hide model properties (])" aria-label="Toggle model properties" aria-keyshortcuts="]">◫</button>
+        <div class="stage-status">
+          <span id="coordinate-readout">x 0 km · z 0 km</span>
+          <span id="feature-count">0 features</span>
+        </div>
+      </div>
+      <div id="canvas-wrap" class="canvas-wrap">
+        <div class="viewport-grid">
+          <div id="primary-viewport" class="viewport-pane active" data-viewport="primary">
+            <canvas id="model-canvas" tabindex="0" aria-label="Primary geodynamic model viewport"></canvas>
+            <button class="viewport-label" data-activate-viewport="primary" aria-label="Activate primary viewport">A · Plan</button>
+          </div>
+          <div id="secondary-viewport" class="viewport-pane" data-viewport="secondary">
+            <canvas id="secondary-canvas" tabindex="0" aria-label="Secondary geodynamic model viewport"></canvas>
+            <button class="viewport-label" data-activate-viewport="secondary" aria-label="Activate secondary viewport">B · 3D</button>
+          </div>
+        </div>
+        <div id="section-actions" class="section-actions hidden">
+          <strong id="section-point-count">0 section points</strong>
+          <span>Click to add bends · Enter to finish</span>
+          <button id="undo-section-point" class="ghost">Undo point</button>
+          <button id="finish-section-path" class="primary">Finish section</button>
+          <button id="cancel-section-path" class="ghost">Cancel</button>
+        </div>
+        <div class="camera-controls" aria-label="Camera controls">
+          <button id="camera-grip" class="camera-grip" title="Drag to move · double-click to dock left" aria-label="Move camera controls">⋮⋮</button>
+          <button id="zoom-out" class="icon-button" title="Zoom out" aria-label="Zoom out">−</button>
+          <span id="zoom-level">100%</span>
+          <button id="zoom-in" class="icon-button" title="Zoom in" aria-label="Zoom in">＋</button>
+          <button id="rotate-left" class="icon-button" title="Rotate view left" aria-label="Rotate view left">↶</button>
+          <button id="rotate-right" class="icon-button" title="Rotate view right" aria-label="Rotate view right">↷</button>
+          <button id="pan-camera" class="icon-button" title="Pan camera: drag the canvas (Shift-drag and middle-drag also work)" aria-label="Toggle camera pan">✋</button>
+          <button id="reset-camera" class="icon-button" title="Reset camera">Reset</button>
+        </div>
+        <aside id="shape-editor" class="shape-editor hidden" aria-label="Shape editor">
+          <div class="shape-editor-header">
+            <div><small>GEOMETRY TOOLS</small><strong>Draw a feature</strong></div>
+            <button id="close-shape-editor" class="ghost" aria-label="Close shape editor">×</button>
+          </div>
+          <label>Feature type
+            <select id="draw-feature-model">
+              <option value="continental plate">Continental plate</option>
+              <option value="oceanic plate">Oceanic plate</option>
+              <option value="subducting plate">Subducting plate</option>
+              <option value="fault">Fault</option>
+              <option value="mantle layer">Mantle layer</option>
+              <option value="plume">Plume</option>
+            </select>
+          </label>
+          <div class="shape-buttons">
+            <button data-draw-mode="points">Point by point</button>
+            <button data-draw-mode="freehand">Freehand</button>
+          </div>
+          <label class="checkbox-row"><input id="smooth-geometry" type="checkbox"> Smooth / curvilinear</label>
+          <div id="drawing-actions" class="drawing-actions hidden">
+            <span id="drawing-count">0 vertices</span>
+            <div><button id="cancel-drawing" class="ghost">Cancel</button><button id="finish-drawing" class="primary">Finish</button></div>
+          </div>
+          <div class="shape-divider"></div>
+          <small class="shape-subhead">SELECTED FEATURE</small>
+          <div class="shape-buttons">
+            <button data-edit-mode="add-vertex">Add vertex</button>
+            <button data-edit-mode="remove-vertex">Remove vertex</button>
+          </div>
+          <button id="reverse-feature" class="wide ghost">Reverse points / dip direction</button>
+          <p class="shape-help">There is no vertex limit. Double-click any selected edge to insert another vertex; drag handles to reshape it.</p>
+        </aside>
+        <aside id="map-editor" class="map-editor hidden" aria-label="Reference map editor">
+          <div class="shape-editor-header">
+            <div><small>DRAWING REFERENCE</small><strong>Background map</strong></div>
+            <button id="close-map-editor" class="ghost" aria-label="Close reference map editor">×</button>
+          </div>
+          <button id="choose-reference-image" class="wide primary">Choose raster image</button>
+          <div id="map-controls" class="hidden">
+            <div id="reference-image-name" class="map-file-name"></div>
+            <label>Image placement
+              <select id="map-fit-mode">
+                <option value="contain">Preserve aspect · show entire image</option>
+                <option value="cover">Preserve aspect · cover bounds</option>
+                <option value="native">Native image pixels</option>
+                <option value="stretch">Stretch exactly to bounds</option>
+              </select>
+            </label>
+            <label>Opacity <input id="map-opacity" type="range" min="0" max="100" value="45"></label>
+            <label>Scale <input id="map-scale" type="range" min="10" max="300" value="100"></label>
+            <div class="form-grid">
+              <label>Horizontal shift (%)<input id="map-offset-x" type="number" value="0" step="1"></label>
+              <label>Vertical shift (%)<input id="map-offset-y" type="number" value="0" step="1"></label>
+              <label>Rotation (°)<input id="map-rotation" type="number" value="0" step="1"></label>
+            </div>
+            <small class="shape-subhead">MAP BOUNDS</small>
+            <div class="form-grid map-bounds">
+              <label id="map-west-label">Left / west<input id="map-west" type="number" step="any"></label>
+              <label id="map-east-label">Right / east<input id="map-east" type="number" step="any"></label>
+              <label id="map-south-label">Bottom / south<input id="map-south" type="number" step="any"></label>
+              <label id="map-north-label">Top / north<input id="map-north" type="number" step="any"></label>
+            </div>
+            <div class="layer-actions">
+              <button id="fit-map-to-grid" class="ghost">Use model domain bounds</button>
+              <button id="remove-reference-image" class="ghost">Remove image</button>
+            </div>
+            <p class="shape-help">Preserve aspect avoids deforming maps. Choose Stretch only when the raster must match the complete model domain. Bounds georeference the image; in spherical mode they are longitude and latitude in degrees.</p>
+          </div>
+        </aside>
+        <aside id="tomography-editor" class="map-editor tomography-editor hidden" aria-label="Tomography explorer">
+          <div class="shape-editor-header">
+            <div><small>ORFEUS · SUBMACHINE</small><strong>Tomography explorer</strong></div>
+            <button id="close-tomography" class="ghost" aria-label="Close tomography explorer">×</button>
+          </div>
+          <p class="tomography-intro">Load numerical dVs values where model coefficients are available. The grid is sampleable, recolorable and exportable—not a screenshot.</p>
+          <details class="tomography-catalog-panel">
+            <summary>Browse all tomography models <span id="tomography-catalog-count">14</span></summary>
+            <div class="tomography-catalog-filters">
+              <input id="tomography-catalog-search" type="search" placeholder="Search model, field or region…">
+              <select id="tomography-catalog-provider" aria-label="Filter tomography provider">
+                <option value="all">All providers</option>
+                <option value="ASPECT / SubMachine">ASPECT / SubMachine</option>
+                <option value="SubMachine">SubMachine</option>
+                <option value="ETH COS">ETH COS</option>
+                <option value="ETH COS / EarthScope EMC">ETH COS / EarthScope EMC</option>
+              </select>
+            </div>
+            <div class="tomography-availability-key">
+              <span class="numerical">● numerical</span><span class="preview">● rendered</span><span class="download">● downloadable volume</span>
+            </div>
+            <div id="tomography-catalog-list" class="tomography-catalog-list"></div>
+            <p class="shape-help">Large COS volumes are catalogued with their data and publication links. NetCDF/HDF5 ingestion is marked separately until a local volume adapter is installed.</p>
+          </details>
+          <label>Tomography model
+            <select id="tomography-model">
+              <option value="model_s20rts">S20RTS · S wave</option>
+              <option value="model_s40rts">S40RTS · S wave</option>
+              <option value="model_semucb_wm1">SEMUCB-WM1 · S wave</option>
+              <option value="model_tx2019slab_s">TX2019slab-S · S wave</option>
+              <option value="model_tx2019slab_p">TX2019slab-P · P wave</option>
+              <option value="model_savani">SAVANI · S wave</option>
+              <option value="model_gypsum_s">GyPSuM · S wave</option>
+              <option value="model_gypsum_p">GyPSuM · P wave</option>
+            </select>
+          </label>
+          <div class="form-grid tomography-depth">
+            <label>Depth (km)<input id="tomography-depth" type="number" min="0" max="2890" value="200"></label>
+            <label>Color range (± dv/v %)<input id="tomography-range" type="number" min="0.1" max="10" step="0.1" value="1"></label>
+            <label>Longitude samples<input id="tomography-nx" type="number" min="16" max="181" value="101"></label>
+            <label>Latitude samples<input id="tomography-ny" type="number" min="12" max="121" value="81"></label>
+          </div>
+          <small class="shape-subhead">SLICE / MODEL BOUNDS</small>
+          <div class="form-grid map-bounds">
+            <label>West longitude<input id="tomography-west" type="number" min="-180" max="180" step="any" value="-20"></label>
+            <label>East longitude<input id="tomography-east" type="number" min="-180" max="180" step="any" value="20"></label>
+            <label>South latitude<input id="tomography-south" type="number" min="-90" max="90" step="any" value="-15"></label>
+            <label>North latitude<input id="tomography-north" type="number" min="-90" max="90" step="any" value="15"></label>
+          </div>
+          <div class="layer-actions">
+            <button id="tomography-current-bounds" class="ghost">Read grid bounds</button>
+            <button id="tomography-apply-bounds" class="ghost">Apply to geometry</button>
+          </div>
+          <label>Overlay opacity <input id="tomography-opacity" type="range" min="0" max="100" value="76"></label>
+          <button id="load-tomography" class="wide primary tomography-load">Load numerical depth grid</button>
+          <small class="shape-subhead">SCALAR / ISO-GEOMETRY</small>
+          <div class="form-grid">
+            <label>Displayed scalar
+              <select id="tomography-scalar-field">
+                <option value="dvs">dVs · native</option>
+                <option value="dvp">dVp · derived</option>
+              </select>
+            </label>
+            <label>Conversion dVs/dVp
+              <input id="tomography-vpvs-ratio" type="number" min="0.1" max="10" step="0.1" value="1.8">
+            </label>
+            <label>Iso-value (%)
+              <input id="tomography-iso-value" type="number" min="-10" max="10" step="0.05" value="0.5">
+            </label>
+            <label>Selected anomaly
+              <select id="tomography-iso-mode">
+                <option value="above">At or above iso-value</option>
+                <option value="below">At or below iso-value</option>
+              </select>
+            </label>
+            <label>Feature thickness (km)
+              <input id="tomography-iso-thickness" type="number" min="1" max="1000" step="5" value="100">
+            </label>
+          </div>
+          <label class="checkbox-row"><input id="tomography-show-iso" type="checkbox" checked> Show editable iso-boundary preview</label>
+          <button id="tomography-create-feature" class="wide ghost" disabled>Create editable feature from largest iso-region</button>
+          <p id="tomography-iso-status" class="shape-help">Load a numerical grid to extract anomaly geometry.</p>
+          <div class="layer-actions">
+            <button id="export-tomography-csv" class="ghost" disabled>Export CSV values</button>
+            <button id="clear-tomography" class="ghost" disabled>Clear grid</button>
+          </div>
+          <div id="tomography-status" class="tomography-status">Ready · S20RTS and S40RTS are available as numerical coefficient grids.</div>
+          <a id="open-submachine" class="tomography-link" href="https://orfeus-eu.org/submachine/index.php?page=tomo_depth" target="_blank" rel="noreferrer">Open this workflow at SubMachine ↗</a>
+          <p class="shape-help">S20RTS/S40RTS are evaluated from ASPECT spherical-harmonic coefficients. Models not downloadable from the public service use a labeled SubMachine image fallback.</p>
+        </aside>
+        <aside id="research-editor" class="map-editor research-editor hidden" aria-label="Functionality research">
+          <div class="shape-editor-header">
+            <div><small>LOCAL KNOWLEDGE INDEX</small><strong>Research GWB functions</strong></div>
+            <button id="close-research" class="ghost" aria-label="Close functionality research">×</button>
+          </div>
+          <p class="tomography-intro">Find implemented tools, manual parameters and working examples without leaving the model.</p>
+          <div class="research-search-row">
+            <input id="research-query" type="search" placeholder="e.g. slab temperature, density, plume…">
+            <button id="run-research" class="primary">Search</button>
+          </div>
+          <label>Search scope
+            <select id="research-scope">
+              <option value="all">Everything</option>
+              <option value="interface">Visual Builder functions</option>
+              <option value="manual">GWB manual</option>
+              <option value="example">Bundled examples</option>
+            </select>
+          </label>
+          <div class="research-quick">
+            <button class="ghost" data-research-query="subduction temperature">Slab thermal</button>
+            <button class="ghost" data-research-query="density composition">Density</button>
+            <button class="ghost" data-research-query="spherical coordinate">Spherical</button>
+            <button class="ghost" data-research-query="plume">Plumes</button>
+          </div>
+          <div id="research-summary" class="tomography-status">Ready · searches local documentation and examples.</div>
+          <div id="research-results" class="research-results"></div>
+          <div class="layer-actions research-links">
+            <a id="research-manual-link" class="ghost" href="https://gwb.readthedocs.io/" target="_blank" rel="noreferrer">Manual ↗</a>
+            <a id="research-github-link" class="ghost" href="https://github.com/GeodynamicWorldBuilder/WorldBuilder/" target="_blank" rel="noreferrer">GitHub search ↗</a>
+          </div>
+          <p class="shape-help">Results marked <strong>Implemented</strong> can open their editor directly. Manual and example matches show the repository source path.</p>
+        </aside>
+        <aside id="gravity-editor" class="map-editor gravity-editor hidden" aria-label="Gravity modelling">
+          <div class="shape-editor-header">
+            <div><small>GMG-INSPIRED · LIVE PREVIEW</small><strong>Gravity modelling</strong></div>
+            <button id="close-gravity" class="ghost" aria-label="Close gravity modelling">×</button>
+          </div>
+          <label class="checkbox-row"><input id="gravity-enabled" type="checkbox"> Enable gravity overlay</label>
+          <label>Displayed field
+            <select id="gravity-field">
+              <option value="bouguer">Modelled Bouguer anomaly</option>
+              <option value="free-air">Approximate free-air anomaly</option>
+              <option value="residual">Residual gravity</option>
+              <option value="gxx">Gravity gradient Gxx (E)</option>
+              <option value="gxy">Gravity gradient Gxy (E)</option>
+              <option value="gxz">Gravity gradient Gxz (E)</option>
+              <option value="gyy">Gravity gradient Gyy (E)</option>
+              <option value="gyz">Gravity gradient Gyz (E)</option>
+              <option value="gzz">Gravity gradient Gzz (E)</option>
+            </select>
+          </label>
+          <div class="form-grid">
+            <label>Reference density (kg/m³)<input id="gravity-reference-density" type="number" min="0" step="10"></label>
+            <label>Topographic slab density<input id="gravity-topography-density" type="number" min="0" step="10"></label>
+            <label>Samples X<input id="gravity-samples-x" type="number" min="8" max="96" step="1"></label>
+            <label>Samples Y<input id="gravity-samples-y" type="number" min="6" max="72" step="1"></label>
+          </div>
+          <label>Residual compares observations with
+            <select id="gravity-residual-base">
+              <option value="bouguer">Modelled Bouguer</option>
+              <option value="free-air">Approximate free-air</option>
+            </select>
+          </label>
+          <label>Overlay opacity<input id="gravity-opacity" type="range" min="5" max="95" value="55"></label>
+          <div class="layer-actions">
+            <button id="import-gravity-observations" class="ghost">Import observed CSV</button>
+            <button id="clear-gravity-observations" class="ghost">Clear observations</button>
+          </div>
+          <input id="gravity-observation-file" type="file" accept=".csv,.txt" hidden>
+          <button id="recompute-gravity" class="wide primary">Recompute gravity</button>
+          <button id="open-gravity-workspace" class="wide ghost">Open gravity results workspace</button>
+          <div id="gravity-status" class="tomography-status">Configure density models, then enable the overlay.</div>
+          <div id="gravity-range" class="gravity-range">No gravity field computed</div>
+          <a class="tomography-link" href="https://juliageodynamics.github.io/GeophysicalModelGenerator.jl/dev/man/gravity_code/" target="_blank" rel="noreferrer">GMG voxel_grav documentation ↗</a>
+          <p class="shape-help">The browser uses a responsive infinite-slab preview and recomputes after model edits. It is not a replacement for GMG’s full 3D voxel integration; export to a future Julia backend will provide publication-grade anomalies and gradients.</p>
+        </aside>
+        <aside id="appearance-editor" class="map-editor appearance-editor hidden" aria-label="Rendering options">
+          <div class="shape-editor-header">
+            <div><small>CANVAS APPEARANCE</small><strong>Rendering options</strong></div>
+            <button id="close-appearance" class="ghost" aria-label="Close rendering options">×</button>
+          </div>
+          <label>Display
+            <select id="render-mode">
+              <option value="geology">Geological materials</option>
+              <option value="temperature">Temperature</option>
+            </select>
+          </label>
+          <label>Interface theme
+            <select id="theme-mode">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </label>
+          <label class="checkbox-row"><input id="render-shading" type="checkbox" checked> Surface shading</label>
+          <label>Light strength <input id="render-light" type="range" min="0" max="100" value="65"></label>
+          <label class="checkbox-row"><input id="auto-temperature-preview" type="checkbox" checked> Auto-show temperature for new features</label>
+          <label class="checkbox-row"><input id="temperature-contours" type="checkbox" checked> Temperature contours</label>
+          <label class="checkbox-row"><input id="slab-projection" type="checkbox" checked> Show dipping slab in plan</label>
+          <small class="shape-subhead">TEMPERATURE SCALE</small>
+          <div class="form-grid">
+            <label>Minimum (K)<input id="temperature-min" type="number" min="0" value="273"></label>
+            <label>Maximum (K)<input id="temperature-max" type="number" min="1" value="1800"></label>
+          </div>
+          <div class="temperature-ramp"><span>Cold</span><span>Hot</span></div>
+          <p class="shape-help">Rendering controls are visual only. They never modify temperatures or other parameters in the generated World Builder file.</p>
+        </aside>
+        <aside id="color-editor" class="map-editor color-editor hidden" aria-label="Color map editor">
+          <div class="shape-editor-header">
+            <div><small>SCALAR COLORING</small><strong>Color map editor</strong></div>
+            <button id="close-color-editor" class="ghost" aria-label="Close color map editor">×</button>
+          </div>
+          <label>Scalar field
+            <select id="color-field">
+              <option value="temperature">Temperature (K)</option>
+              <option value="gravity">Gravity / tensor field</option>
+              <option value="tomography">Tomography dVs (%)</option>
+              <option value="topography">Topography (m)</option>
+            </select>
+          </label>
+          <label>Preset
+            <select id="color-preset">
+              <option value="crameri-vik">Crameri vik · scientific diverging</option>
+              <option value="thermal">Thermal</option>
+              <option value="coolwarm">Cool to warm</option>
+              <option value="viridis">Viridis</option>
+              <option value="magma">Magma</option>
+              <option value="terrain">Terrain</option>
+              <option value="grayscale">Grayscale</option>
+              <option value="custom">Custom three-color</option>
+            </select>
+          </label>
+          <div id="color-gradient-preview" class="color-gradient-preview"><i></i><i></i><i></i></div>
+          <p class="shape-help">Tomography defaults to Fabio Crameri’s perceptually uniform <strong>vik</strong> scientific colour map.</p>
+          <div class="color-range-labels"><span id="color-range-min-label">273</span><span id="color-range-max-label">1800</span></div>
+          <div class="form-grid">
+            <label>Minimum<input id="color-min" type="number" step="any"></label>
+            <label>Maximum<input id="color-max" type="number" step="any"></label>
+          </div>
+          <button id="color-rescale-data" class="wide ghost">Rescale to visible data</button>
+          <label class="checkbox-row"><input id="color-reverse" type="checkbox"> Reverse color map</label>
+          <label>Discrete bands <span id="color-steps-value">Continuous</span>
+            <input id="color-steps" type="range" min="0" max="16" step="1" value="0">
+          </label>
+          <label>Opacity <span id="color-opacity-value">100%</span>
+            <input id="color-opacity" type="range" min="5" max="100" step="1" value="100">
+          </label>
+          <small class="shape-subhead">CUSTOM CONTROL COLORS</small>
+          <div class="color-stop-controls">
+            <label>Low<input id="color-low" type="color" value="#07104d"></label>
+            <label>Middle<input id="color-mid" type="color" value="#e43b31"></label>
+            <label>High<input id="color-high" type="color" value="#ffffff"></label>
+          </div>
+          <button id="color-reset" class="wide ghost">Reset field colors</button>
+          <p class="shape-help">Comparable to a compact ParaView transfer-function editor. Changes affect visualization and screenshots, not the generated GWB parameters.</p>
+        </aside>
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">＋</div>
+          <strong>Start with a geological feature</strong>
+          <span>Drag one from the left onto this grid</span>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="legend-cell"></i><b id="cell-size">25 × 20 km cells</b></span>
+        <span><i class="legend-node"></i>Geometry handle</span>
+        <span><i class="legend-link"></i>Shared boundary</span>
+        <span class="shortcut-hint">Drag empty: box select · ⌘/Ctrl-click: add · Drag 3D: orbit · H Pan</span>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <div class="tabs" role="tablist">
+        <button class="active" data-tab="properties">Properties</button>
+        <button data-tab="output">Generated files</button>
+      </div>
+
+      <div id="properties-tab" class="tab-panel">
+        <details class="panel-section grid-disclosure">
+          <summary><span>Grid setup</span><small id="grid-summary">Cartesian · 2D</small></summary>
+          <div class="form-grid">
+            <label>Grid type<select id="grid-type"><option value="cartesian">Cartesian</option><option value="chunk">Spherical chunk</option></select></label>
+            <label>Dimension<select id="dimension"><option value="2">2D</option><option value="3">3D</option></select></label>
+            <label><span id="x-min-label">X min (km)</span><input id="x-min" type="number"></label>
+            <label><span id="x-max-label">X max (km)</span><input id="x-max" type="number"></label>
+            <label class="y-field hidden"><span id="y-min-label">Y min (km)</span><input id="y-min" type="number"></label>
+            <label class="y-field hidden"><span id="y-max-label">Y max (km)</span><input id="y-max" type="number"></label>
+            <label><span id="z-min-label">Z min (km)</span><input id="z-min" type="number"></label>
+            <label><span id="z-max-label">Z max (km)</span><input id="z-max" type="number"></label>
+            <label>Cells X<input id="cells-x" type="number" min="1"></label>
+            <label class="y-field hidden">Cells Y<input id="cells-y" type="number" min="1"></label>
+            <label>Cells Z<input id="cells-z" type="number" min="1"></label>
+          </div>
+        </details>
+        <section id="feature-inspector" class="panel-section feature-inspector">
+          <div class="inspector-placeholder">
+            <span>◇</span>
+            <strong>No feature selected</strong>
+            <p>Select a feature on the canvas to edit its geometry, temperature and composition.</p>
+          </div>
+        </section>
+      </div>
+
+      <div id="output-tab" class="tab-panel hidden">
+        <div id="validation-summary" class="validation good">Valid project</div>
+        <div class="output-switcher">
+          <button class="active" data-output="wb">World Builder JSON</button>
+          <button data-output="grid">Grid config</button>
+        </div>
+        <div id="wb-export-options" class="wb-export-options">
+          <label><input id="export-comments" type="checkbox" checked> Add explanatory comments</label>
+          <label><input id="export-references" type="checkbox" checked> Add data references</label>
+          <small>GWB accepts <code>//</code> comments. Disable comments for strict JSON-only software.</small>
+        </div>
+        <pre id="output-code"></pre>
+        <button id="copy-output" class="wide ghost">Copy current output</button>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="gravity-workspace" class="gravity-workspace">
+    <div class="gravity-workspace-header">
+      <div><small>INTERACTIVE POTENTIAL-FIELD INTERPRETATION</small><strong>Gravity results workspace</strong></div>
+      <label>Layout
+        <select id="gravity-workspace-layout">
+          <option value="triple">Map + 3D + section</option>
+          <option value="map-3d">Map + 3D</option>
+          <option value="map-section">Map + section</option>
+          <option value="map">Map only</option>
+          <option value="three-d">3D only</option>
+          <option value="section">Section only</option>
+        </select>
+      </label>
+      <span class="gravity-workspace-actions">
+        <button id="export-gravity-screenshot" class="ghost">📷 Screenshot</button>
+        <button id="refresh-gravity-workspace" class="ghost">Refresh</button>
+        <button id="close-gravity-workspace" class="ghost">Close</button>
+      </span>
+    </div>
+    <div id="gravity-workspace-grid" class="gravity-workspace-grid" data-layout="triple">
+      <section class="gravity-result-pane gravity-map-pane"><header>Gravity map</header><canvas id="gravity-map-canvas"></canvas></section>
+      <section class="gravity-result-pane gravity-3d-pane"><header>3D density model + anomaly surface</header><canvas id="gravity-3d-canvas"></canvas></section>
+      <section class="gravity-result-pane gravity-section-pane"><header>Section / model profile</header><canvas id="gravity-section-canvas"></canvas></section>
+    </div>
+  </dialog>
+
+  <dialog id="examples-dialog" class="examples-dialog">
+    <div class="dialog-header">
+      <div><small>WORLD BUILDER LIBRARY</small><h2>Start from an example</h2></div>
+      <button id="close-examples" class="ghost" aria-label="Close examples">Close</button>
+    </div>
+    <div class="example-controls">
+      <input id="example-search" type="search" placeholder="Search subduction, plume, spherical…">
+      <select id="example-category" aria-label="Example category"><option value="all">All collections</option></select>
+    </div>
+    <div id="example-summary" class="example-summary">Loading examples…</div>
+    <div id="example-grid" class="example-grid"></div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="app.js?v=49"></script>
+</body>
+</html>

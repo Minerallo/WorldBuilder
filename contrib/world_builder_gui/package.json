@@ -1,0 +1,10 @@
+{
+  "name": "gwb-visual-builder",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "examples": "node scripts/build_examples.mjs",
+    "start": "npm run examples && node server.mjs",
+    "test": "npm run examples && node --test tests/*.test.mjs"
+  }
+}
