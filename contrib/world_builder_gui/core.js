@@ -127,6 +127,111 @@ export function createFeature(model, x, z, index = 0) {
   return base;
 }
 
+function wrappedLongitudeDelta(from, to) {
+  let delta = Number(to) - Number(from);
+  while (delta > 180) delta -= 360;
+  while (delta < -180) delta += 360;
+  return delta;
+}
+
+function normalizedLongitude(longitude) {
+  let value = Number(longitude);
+  while (value > 180) value -= 360;
+  while (value < -180) value += 360;
+  return value;
+}
+
+export function deriveSubductionDipPoint(points, properties = {}, distanceDegrees = 5) {
+  const usable = (points || []).filter(point =>
+    Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])));
+  if (usable.length < 2) return null;
+
+  const explicitKeys = ["Dipping_Point", "dipping_point", "dip_point", "dip point"];
+  const explicit = explicitKeys.map(key => properties?.[key]).find(value =>
+    Array.isArray(value) && value.length >= 2
+    && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1])));
+  if (explicit) {
+    return [normalizedLongitude(explicit[0]), Math.max(-90, Math.min(90, Number(explicit[1])))];
+  }
+
+  const middle = Math.max(0, Math.floor((usable.length - 1) / 2));
+  const a = usable[middle];
+  const b = usable[Math.min(usable.length - 1, middle + 1)];
+  const longitudeVector = usable.reduce((sum, point) => {
+    const longitude = Number(point[0]) * Math.PI / 180;
+    return [sum[0] + Math.cos(longitude), sum[1] + Math.sin(longitude)];
+  }, [0, 0]);
+  const center = [
+    Math.atan2(longitudeVector[1], longitudeVector[0]) * 180 / Math.PI,
+    usable.reduce((sum, point) => sum + Number(point[1]) / usable.length, 0)
+  ];
+
+  const azimuthKeys = [
+    "Trench_Normal_Azimuth", "trench_normal_azimuth", "trenchNormalAzimuth",
+    "normal_azimuth", "normalAzimuth"
+  ];
+  const azimuth = azimuthKeys.map(key => Number(properties?.[key])).find(Number.isFinite);
+  let east;
+  let north;
+  if (Number.isFinite(azimuth)) {
+    const radians = azimuth * Math.PI / 180;
+    east = Math.sin(radians);
+    north = Math.cos(radians);
+  } else {
+    const polarityKeys = [
+      "polarity", "Polarity", "subduction_polarity", "subductionPolarity",
+      "SubductionPolarity", "gpml:subductionPolarity"
+    ];
+    const polarity = String(polarityKeys.map(key => properties?.[key]).find(value => value != null) || "").toLowerCase();
+    east = 0;
+    north = 0;
+    for (let index = 0; index < usable.length - 1; index++) {
+      const start = usable[index];
+      const end = usable[index + 1];
+      const latitude = (Number(start[1]) + Number(end[1])) / 2;
+      const tangentEast = wrappedLongitudeDelta(start[0], end[0]) * Math.cos(latitude * Math.PI / 180);
+      const tangentNorth = Number(end[1]) - Number(start[1]);
+      const length = Math.hypot(tangentEast, tangentNorth);
+      // Ignore discontinuities introduced when separate topology fragments
+      // are concatenated into one GWS line.
+      if (length < 1e-10 || length > 10) continue;
+      if (polarity.includes("right")) {
+        east += tangentNorth;
+        north -= tangentEast;
+      } else {
+        // GPlates "Left" polarity means the overriding plate is on the
+        // left-hand side of the ordered trench, which is also the slab dip side.
+        east -= tangentNorth;
+        north += tangentEast;
+      }
+    }
+    const normalLength = Math.hypot(east, north);
+    if (normalLength < 1e-10) {
+      const tangentEast = wrappedLongitudeDelta(a[0], b[0]) * Math.cos(center[1] * Math.PI / 180);
+      const tangentNorth = Number(b[1]) - Number(a[1]);
+      if (polarity.includes("right")) {
+        east = tangentNorth;
+        north = -tangentEast;
+      } else {
+        east = -tangentNorth;
+        north = tangentEast;
+      }
+    } else {
+      east /= normalLength;
+      north /= normalLength;
+    }
+  }
+
+  const directionLength = Math.hypot(east, north) || 1;
+  east /= directionLength;
+  north /= directionLength;
+  const longitudeScale = Math.max(.15, Math.cos(center[1] * Math.PI / 180));
+  return [
+    normalizedLongitude(center[0] + distanceDegrees * east / longitudeScale),
+    Math.max(-90, Math.min(90, center[1] + distanceDegrees * north))
+  ];
+}
+
 export function geologicalLayerPreset(feature) {
   const start = Number(feature.minDepth) || 0;
   if (feature.model === "continental plate") {
@@ -374,10 +479,12 @@ export function buildWorldBuilder(settings, features, rawWorld = null) {
   if (settings.topographyMode === "isostatic") {
     world["compensation depth"] = Number(settings.compensationDepth);
     world["number of integration points"] = Math.max(2, Math.round(Number(settings.integrationPoints)));
-    world["Reference profile point"] = [Number(settings.referenceProfileX), Number(settings.referenceProfileY)];
+    world["reference profile point"] = [Number(settings.referenceProfileX), Number(settings.referenceProfileY)];
+    delete world["Reference profile point"];
   } else if (settings.topographyMode != null) {
     delete world["compensation depth"];
     delete world["number of integration points"];
+    delete world["reference profile point"];
     delete world["Reference profile point"];
   }
   if (Number(settings.dimension) === 2) {
@@ -398,13 +505,13 @@ export function importWorldBuilder(world) {
     gridType: coordinateSystem === "spherical" ? "chunk" : "cartesian",
     surfaceTemperature: world["surface temperature"] ?? DEFAULT_SETTINGS.surfaceTemperature,
     mantleTemperature: world["potential mantle temperature"] ?? DEFAULT_SETTINGS.mantleTemperature,
-    topographyMode: world["Reference profile point"] ? "isostatic" : DEFAULT_SETTINGS.topographyMode,
+    topographyMode: (world["reference profile point"] || world["Reference profile point"]) ? "isostatic" : DEFAULT_SETTINGS.topographyMode,
     backgroundDensity: world["background density"] ?? DEFAULT_SETTINGS.backgroundDensity,
     gravityMagnitude: world["gravity model"]?.magnitude ?? DEFAULT_SETTINGS.gravityMagnitude,
     compensationDepth: world["compensation depth"] ?? DEFAULT_SETTINGS.compensationDepth,
     integrationPoints: world["number of integration points"] ?? DEFAULT_SETTINGS.integrationPoints,
-    referenceProfileX: world["Reference profile point"]?.[0] ?? DEFAULT_SETTINGS.referenceProfileX,
-    referenceProfileY: world["Reference profile point"]?.[1] ?? DEFAULT_SETTINGS.referenceProfileY,
+    referenceProfileX: (world["reference profile point"] || world["Reference profile point"])?.[0] ?? DEFAULT_SETTINGS.referenceProfileX,
+    referenceProfileY: (world["reference profile point"] || world["Reference profile point"])?.[1] ?? DEFAULT_SETTINGS.referenceProfileY,
     radius: world["coordinate system"]?.radius ?? DEFAULT_SETTINGS.radius,
     section: clone(world["cross section"])
   };
@@ -750,6 +857,56 @@ export function connectFeatures(source, target) {
   });
   target.points[nearest] = [...sourcePoint];
   return true;
+}
+
+export function applyFieldOperation(valuesA, valuesB = [], options = {}) {
+  const {
+    operation = "subtract", scale = 1, offset = 0,
+    nx = valuesA.length, ny = 1, dx = 1, dy = 1
+  } = options;
+  const a = Array.from(valuesA, Number);
+  const b = Array.from(valuesB, Number);
+  const finite = value => Number.isFinite(value);
+  if (["gradient", "gradient-x", "gradient-y"].includes(operation)) {
+    const columns = Math.max(1, Number(nx));
+    const rows = Math.max(1, Number(ny));
+    if (columns * rows !== a.length) throw new Error("Gradient dimensions do not match the source field.");
+    const spacingX = Math.abs(Number(dx)) || 1;
+    const spacingY = Math.abs(Number(dy)) || 1;
+    const valueAt = (column, row) => a[Math.max(0, Math.min(rows - 1, row)) * columns + Math.max(0, Math.min(columns - 1, column))];
+    return a.map((value, index) => {
+      if (!finite(value)) return NaN;
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const leftColumn = Math.max(0, column - 1);
+      const rightColumn = Math.min(columns - 1, column + 1);
+      const upperRow = Math.max(0, row - 1);
+      const lowerRow = Math.min(rows - 1, row + 1);
+      const left = valueAt(leftColumn, row);
+      const right = valueAt(rightColumn, row);
+      const upper = valueAt(column, upperRow);
+      const lower = valueAt(column, lowerRow);
+      if (![left, right, upper, lower].every(finite)) return NaN;
+      const gradientX = (right - left) / (Math.max(1, rightColumn - leftColumn) * spacingX);
+      // Grid rows run north to south, so positive geographic y is upwards.
+      const gradientY = (upper - lower) / (Math.max(1, lowerRow - upperRow) * spacingY);
+      if (operation === "gradient-x") return gradientX;
+      if (operation === "gradient-y") return gradientY;
+      return Math.hypot(gradientX, gradientY);
+    });
+  }
+  return a.map((value, index) => {
+    const other = b[index];
+    if (!finite(value)) return NaN;
+    if (operation === "scale-offset") return value * Number(scale || 0) + Number(offset || 0);
+    if (operation === "absolute") return Math.abs(value);
+    if (!finite(other)) return NaN;
+    if (operation === "add") return value + other;
+    if (operation === "reverse-subtract") return other - value;
+    if (operation === "multiply") return value * other;
+    if (operation === "divide") return Math.abs(other) > Number.EPSILON ? value / other : NaN;
+    return value - other;
+  });
 }
 
 export function validateProject(settings, features) {

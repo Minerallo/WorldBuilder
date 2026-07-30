@@ -43,6 +43,33 @@ try {
     });
   }
 
+  const adaptiveExample = examples[0];
+  const adaptive = await runtime.run({
+    wbText: JSON.stringify(adaptiveExample.world),
+    gridText: adaptiveExample.grid,
+    resolutionLimit: 16,
+    sampling: "adaptive",
+    adaptiveOptions: {
+      baseResolution: 2,
+      maxDepth: 2,
+      maxCells: 2000,
+      temperatureTolerance: 20
+    }
+  });
+  summaries.push({
+    title: `${adaptiveExample.title} · adaptive`,
+    coordinateSystem: adaptiveExample.coordinateSystem,
+    dimension: adaptive.dimension,
+    cells: adaptive.cells,
+    leafCells: adaptive.leafCellCount,
+    maximumLevel: adaptive.adaptiveMaximumLevel,
+    points: adaptive.points.length / 3,
+    temperatures: adaptive.temperature.length,
+    minimumTemperature: Math.min(...adaptive.temperature),
+    maximumTemperature: Math.max(...adaptive.temperature),
+    connectivity: adaptive.connectivity.length
+  });
+
   output.textContent = JSON.stringify({
     status: "passed",
     results: summaries

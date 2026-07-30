@@ -48,7 +48,11 @@ if(WB_INCLUDE_UNIT_TEST)
   set(test_name "unit_tests")
   
   # Add compile target
-  add_executable(${test_name} ${UNIT_TEST_SOURCES})
+  add_executable(${test_name}
+                 ${UNIT_TEST_SOURCES}
+                 "${CMAKE_SOURCE_DIR}/source/gwb-web/adaptive_sampler.cc")
+  target_include_directories(${test_name} PRIVATE
+                             "${CMAKE_SOURCE_DIR}/source/gwb-web")
   
   if(NOT ${CMAKE_VERSION} VERSION_LESS "3.9.0") # Preventing issues with older cmake compilers which do not support VERSION_GREATER_EQUAL
     target_compile_options(${test_name} INTERFACE ${WB_COMPILER_OPTIONS_INTERFACE} PRIVATE ${WB_COMPILER_OPTIONS_PRIVATE})

@@ -295,7 +295,9 @@ if(WB_ENABLE_WEB)
     message(FATAL_ERROR "WB_ENABLE_WEB requires the Emscripten toolchain.")
   endif()
 
-  add_executable(gwb-web "${CMAKE_CURRENT_SOURCE_DIR}/source/gwb-web/bindings.cc")
+  add_executable(gwb-web
+    "${CMAKE_CURRENT_SOURCE_DIR}/source/gwb-web/bindings.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/source/gwb-web/adaptive_sampler.cc")
   set_target_properties(gwb-web PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON

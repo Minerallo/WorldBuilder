@@ -4,7 +4,7 @@ import {
   DEFAULT_SETTINGS, createFeature, buildWorldBuilder, buildGrid, buildVtp,
   buildLegacyVtk, buildObj, buildGeoJson, buildGeometryCsv,
   connectFeatures, validateProject, importWorldBuilder, applyGridConfig,
-  geologicalLayerPreset, createPlacementPoints
+  geologicalLayerPreset, createPlacementPoints, deriveSubductionDipPoint, applyFieldOperation
 } from "../core.js";
 import { PLANETARY_BODY_CATALOG, planetaryBodyById, searchPlanetaryBodies } from "../planetary-catalog.mjs";
 
@@ -19,6 +19,25 @@ test("planetary library supplies GWB-ready spherical constants and searchable da
 import { buildSubmachineRequest, extractSubmachineImageUrl } from "../submachine.mjs";
 import { LITHOSPHERE_CATALOG, searchLithosphereModels } from "../lithosphere-catalog.mjs";
 import { parseLithosphereTable, regularLithosphereGrid, remapGeographicGridToCartesian } from "../lithosphere-table.mjs";
+
+test("field calculator combines scalar layers and handles invalid division", () => {
+  assert.deepEqual(applyFieldOperation([5, 8, 11], [2, 3, 4], { operation: "subtract" }), [3, 5, 7]);
+  assert.deepEqual(applyFieldOperation([5, 8, 11], [2, 3, 4], { operation: "add" }), [7, 11, 15]);
+  const divided = applyFieldOperation([4, 6], [2, 0], { operation: "divide" });
+  assert.equal(divided[0], 2);
+  assert.ok(Number.isNaN(divided[1]));
+  assert.deepEqual(applyFieldOperation([-2, 3], [], { operation: "scale-offset", scale: 2, offset: 1 }), [-3, 7]);
+});
+
+test("field calculator computes gradient magnitude on a regular scalar grid", () => {
+  const values = [
+    0, 1, 2,
+    -2, -1, 0,
+    -4, -3, -2
+  ];
+  const gradient = applyFieldOperation(values, [], { operation: "gradient", nx: 3, ny: 3, dx: 1, dy: 1 });
+  assert.ok(Math.abs(gradient[4] - Math.sqrt(5)) < 1e-12);
+});
 
 test("catalogues downloadable lithosphere models and searches their physical fields", () => {
   assert.ok(LITHOSPHERE_CATALOG.length >= 7);
@@ -102,6 +121,30 @@ test("subduction exposes valid geometry and thermal controls", () => {
   assert.deepEqual(feature.segments[0].thickness, [90000]);
   assert.equal(feature["temperature models"][0]["subducting velocity"], 0.05);
   assert.equal(feature["temperature models"][0]["spreading velocity"], 0.05);
+});
+
+test("GPlates subduction dip points preserve explicit normals and polarity", () => {
+  const trench = [[-20, 10], [0, 10], [20, 10]];
+  assert.deepEqual(
+    deriveSubductionDipPoint(trench, { Dipping_Point: [7.5, -4.25] }),
+    [7.5, -4.25]
+  );
+  const left = deriveSubductionDipPoint(trench, { subduction_polarity: "Left" });
+  const right = deriveSubductionDipPoint(trench, { subduction_polarity: "Right" });
+  assert.ok(left[1] > 10, "Left polarity should dip north of an eastward trench");
+  assert.ok(right[1] < 10, "Right polarity should dip south of an eastward trench");
+  const dateline = deriveSubductionDipPoint([[179, 0], [-179, 0]], { polarity: "Left" });
+  assert.ok(Math.abs(Math.abs(dateline[0]) - 180) < 1e-9);
+  assert.ok(dateline[1] > 0);
+  const chile = deriveSubductionDipPoint(
+    [
+      [-75.6, -45.5], [-75.8, -40], [-76, -35], [-76.2, -30], [-76.4, -25],
+      [-76.6, -20], [-74.8, -16.6], [-77.8, -13.6], [-80.6, -9.3],
+      [-82, -5.7], [-81.6, -2.7], [-78.4, 6.7]
+    ],
+    { polarity: "Right" }
+  );
+  assert.ok(chile[0] > -77, "A northward Chile trench should dip predominantly eastward");
 });
 
 test("fault exports explicit dip geometry instead of relying on unsupported defaults", () => {
@@ -360,7 +403,7 @@ test("exports and imports isostatic reference-column settings", () => {
   const world = buildWorldBuilder(settings, []);
   assert.equal(world["compensation depth"], 300000);
   assert.equal(world["number of integration points"], 120);
-  assert.deepEqual(world["Reference profile point"], [125000, 50000]);
+  assert.deepEqual(world["reference profile point"], [125000, 50000]);
   const imported = importWorldBuilder(world);
   assert.equal(imported.settings.topographyMode, "isostatic");
   assert.equal(imported.settings.compensationDepth, 300000);

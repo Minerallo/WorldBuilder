@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Visual model builder for the Geodynamic World Builder">
   <title>GWB Visual Builder</title>
-  <link rel="stylesheet" href="styles.css?v=38">
+  <link rel="stylesheet" href="styles.css?v=46">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <img class="brand-logo" src="/assets/gwb-logo.png?v=5" alt="Geodynamic World Builder logo" width="42" height="42">
-      <div><strong>Visual Builder</strong><small>Geodynamic World Builder</small></div>
+      <div><strong>Visual Builder</strong><small>Geodynamic World Builder</small><span id="gwb-version-badge" class="version-badge" title="Reading the World Builder source version">GWB 1.2</span></div>
     </div>
     <div class="top-actions">
       <nav class="project-links" aria-label="GWB project links">
@@ -28,6 +28,7 @@
       </div>
       <button id="new-project" class="ghost">New</button>
       <button id="open-examples" class="ghost">Examples</button>
+      <button id="open-tutorials" class="ghost" title="Learn Visual Builder with guided, interactive lessons">Tutorials</button>
       <button id="save-project-state" class="ghost" title="Download a complete editable Visual Builder project">Save project</button>
       <label class="button ghost" for="open-project-state" title="Reopen a saved Visual Builder project">Open project</label>
       <input id="open-project-state" type="file" accept=".gwbproject,.json,application/json" hidden>
@@ -183,10 +184,11 @@
             <input id="paleo-age-slider" aria-label="Paleogeographic age" type="range" min="0" max="1000" value="100" step="1">
           </div>
           <div class="paleo-layer-grid">
-            <label><input id="paleo-coastlines" type="checkbox" checked> Continents</label>
-            <label><input id="paleo-subduction" type="checkbox" checked> Subduction</label>
-            <label><input id="paleo-boundaries" type="checkbox" checked> Plate boundaries</label>
+            <label title="Load and show reconstructed continental outlines"><input id="paleo-coastlines" type="checkbox" checked> Continents</label>
+            <label title="Load and show reconstructed subduction zones"><input id="paleo-subduction" type="checkbox" checked> Subduction</label>
+            <label title="Load and show reconstructed plate boundaries"><input id="paleo-boundaries" type="checkbox" checked> Plate boundaries</label>
           </div>
+          <p class="shape-help">These switches control both downloaded reference vectors and which visible groups are converted.</p>
           <label>Reference frame
             <select id="paleo-anchor">
               <option value="0">Model mantle frame · plate 0</option>
@@ -197,7 +199,7 @@
           <button id="load-local-gplates" class="wide ghost">Load bundled GWB contribution · 1000 Ma</button>
           <div class="paleo-actions">
             <button id="build-paleo-relief">Build editable relief proxy</button>
-            <button id="convert-paleo-features">Convert vectors to features</button>
+            <button id="convert-paleo-features">Convert all visible vectors to features</button>
           </div>
           <label class="checkbox-row"><input id="show-paleogeography" type="checkbox" checked> Show reconstruction on plan view</label>
           <p id="paleo-status" class="shape-help">Choose an age and model. Imported PaleoDEM grids remain the source of quantitative elevation; the relief proxy is a sketching aid.</p>
@@ -221,6 +223,11 @@
               <label>Reference X / longitude<input id="reference-profile-x" type="number" step="0.1"></label>
               <label>Reference Y / latitude<input id="reference-profile-y" type="number" step="0.1"></label>
             </div>
+            <div id="isostasy-compute-state" class="isostasy-compute-state pending">
+              <strong>Not computed yet</strong>
+              <span>Enable density on at least one feature, then calculate the surface.</span>
+            </div>
+            <button id="compute-isostatic-topography-inline" class="wide primary">Compute and display topography</button>
             <p class="shape-help">The reference column defines compensation pressure. Feature density models use composition reference densities configured in each feature.</p>
           </div>
         </div>
@@ -253,7 +260,14 @@
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="tomography" checked><span class="layer-eye">◉</span><span><strong>Numerical tomography</strong><small>Sampleable dVs scalar grid</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="lithosphere" checked><span class="layer-eye">◉</span><span><strong>Lithosphere model</strong><small>Imported crust, LAB, thermal or density field</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="gravity" checked><span class="layer-eye">◉</span><span><strong>Gravity anomaly</strong><small>Live Bouguer, free-air or residual preview</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="computedThermal" checked><span class="layer-eye">◉</span><span><strong>Computed thermal state</strong><small>GWB WebAssembly temperature samples</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="legend" checked><span class="layer-eye">◉</span><span><strong>Colour scales</strong><small>Elevation and temperature legends</small></span></label>
+        </div>
+        <div class="section-heading navigator-heading layer-feature-heading">
+          <span>Calculated fields</span><small>Non-destructive results</small>
+        </div>
+        <div id="derived-layer-list" class="derived-layer-list">
+          <div class="navigator-empty">No calculated fields.</div>
         </div>
         <div class="section-heading navigator-heading layer-feature-heading">
           <span>Feature layers</span><small id="visible-layer-count">0 visible</small>
@@ -291,6 +305,8 @@
             <button id="toggle-lithosphere" class="icon-button lithosphere-button" aria-expanded="false">Lithosphere models</button>
             <button id="toggle-planetary" class="icon-button planetary-button" aria-expanded="false">Planetary bodies</button>
             <button id="toggle-gravity" class="icon-button gravity-button" aria-expanded="false">Gravity</button>
+            <button id="toggle-computation" class="icon-button compute-button" aria-expanded="false">Model computation</button>
+            <button id="toggle-field-calculator" class="icon-button calculator-button" aria-expanded="false">Field calculator</button>
             <button id="toggle-research" class="icon-button research-button" aria-expanded="false">Research functions</button>
           </div>
         </details>
@@ -331,9 +347,11 @@
         </div>
         <div id="section-actions" class="section-actions hidden">
           <strong id="section-point-count">0 section points</strong>
-          <span>Click to add bends · Enter to finish</span>
+          <span id="section-action-hint">Click to add bends · drag points to move them · Enter to finish</span>
           <button id="undo-section-point" class="ghost">Undo point</button>
+          <button id="remove-section-point" class="ghost">Remove selected point</button>
           <button id="finish-section-path" class="primary">Finish section</button>
+          <button id="delete-section-path" class="ghost danger">Delete section</button>
           <button id="cancel-section-path" class="ghost">Cancel</button>
         </div>
         <div class="camera-controls collapsed" aria-label="Camera controls">
@@ -709,6 +727,42 @@
           <a class="tomography-link" href="https://juliageodynamics.github.io/GeophysicalModelGenerator.jl/dev/man/gravity_code/" target="_blank" rel="noreferrer">GMG voxel_grav documentation ↗</a>
           <p class="shape-help">The browser uses a responsive infinite-slab preview and recomputes after model edits. It is not a replacement for GMG’s full 3D voxel integration; export to a future Julia backend will provide publication-grade anomalies and gradients.</p>
         </aside>
+        <aside id="computation-editor" class="map-editor computation-editor hidden" aria-label="GWB model computation">
+          <div class="shape-editor-header">
+            <div><small id="computation-engine-version">GWB C++ · WEBASSEMBLY WORKER</small><strong>Model computation</strong></div>
+            <button id="close-computation" class="ghost" aria-label="Close model computation">×</button>
+          </div>
+          <p class="shape-help">Sample the generated World Builder model with the real GWB engine. Results stay in this browser session as visual layers.</p>
+          <label>Sampling mesh
+            <select id="computation-sampling">
+              <option value="uniform">Uniform structured grid</option>
+              <option value="adaptive">Adaptive quadtree / octree (experimental)</option>
+            </select>
+          </label>
+          <div class="form-grid">
+            <label>Resolution limit<input id="computation-resolution" type="number" min="8" max="256" step="8" value="96"></label>
+            <label>Thermal slice depth (km)<input id="computation-depth" type="number" min="0" step="10" value="100"></label>
+          </div>
+          <div id="adaptive-computation-options" class="adaptive-computation-options hidden">
+            <div class="form-grid">
+              <label>Base resolution<input id="computation-adaptive-base" type="number" min="1" max="16" step="1" value="4"></label>
+              <label>Maximum depth<input id="computation-adaptive-depth" type="number" min="0" max="10" step="1" value="4"></label>
+              <label>Temperature tolerance (K)<input id="computation-adaptive-temperature" type="number" min="0" step="5" value="25"></label>
+              <label>Maximum leaf cells<input id="computation-adaptive-cells" type="number" min="64" max="1000000" step="1000" value="100000"></label>
+            </div>
+            <p class="shape-help">Cells refine around nonlinear temperature, composition, tags and topography. Isostatic calculations always use the structured grid.</p>
+          </div>
+          <label>Thermal opacity<input id="computation-opacity" type="range" min="5" max="100" value="78"></label>
+          <div class="compute-action-grid">
+            <button id="compute-thermal-state" class="primary">Compute thermal state</button>
+            <button id="compute-isostatic-topography" class="ghost">Compute isostatic topography</button>
+          </div>
+          <button id="cancel-computation" class="wide ghost hidden">Cancel calculation</button>
+          <div id="computation-progress" class="compute-progress" aria-hidden="true"><i></i></div>
+          <div id="computation-status" class="tomography-status">Ready · WebAssembly runs in a background worker.</div>
+          <div id="computation-result" class="gravity-range">No sampled model in this session</div>
+          <p class="shape-help">Thermal mode samples GWB temperature models throughout the volume. Isostatic mode uses composition densities, gravity, compensation depth and the selected reference column.</p>
+        </aside>
         <aside id="appearance-editor" class="map-editor appearance-editor hidden" aria-label="Rendering options">
           <div class="shape-editor-header">
             <div><small>CANVAS APPEARANCE</small><strong>Rendering options</strong></div>
@@ -788,6 +842,42 @@
           </div>
           <button id="color-reset" class="wide ghost">Reset field colors</button>
           <p class="shape-help">Comparable to a compact ParaView transfer-function editor. Changes affect visualization and screenshots, not the generated GWB parameters.</p>
+        </aside>
+        <aside id="field-calculator" class="map-editor field-calculator hidden" aria-label="Field calculator">
+          <div class="shape-editor-header">
+            <span>⋮⋮</span><strong>Field calculator</strong>
+            <button id="close-field-calculator" class="close-button" aria-label="Close field calculator">×</button>
+          </div>
+          <p class="shape-help">Combine numerical grids without changing the source layers. The second field is resampled onto field A where required.</p>
+          <label>Field A
+            <select id="calculator-source-a"></select>
+          </label>
+          <label>Operation
+            <select id="calculator-operation">
+              <option value="subtract">Subtract · A − B</option>
+              <option value="reverse-subtract">Reverse subtract · B − A</option>
+              <option value="add">Add · A + B</option>
+              <option value="multiply">Multiply · A × B</option>
+              <option value="divide">Divide · A ÷ B</option>
+              <option value="gradient">Gradient magnitude · |∇A|</option>
+              <option value="gradient-x">Horizontal derivative · ∂A/∂x</option>
+              <option value="gradient-y">Vertical derivative · ∂A/∂y</option>
+              <option value="scale-offset">Scale and offset</option>
+              <option value="absolute">Absolute value · |A|</option>
+            </select>
+          </label>
+          <label id="calculator-source-b-row">Field B
+            <select id="calculator-source-b"></select>
+          </label>
+          <div id="calculator-scale-row" class="form-grid hidden">
+            <label>Scale<input id="calculator-scale" type="number" step="any" value="1"></label>
+            <label>Offset<input id="calculator-offset" type="number" step="any" value="0"></label>
+          </div>
+          <label>Result layer name
+            <input id="calculator-result-name" type="text" maxlength="80" placeholder="Generated automatically">
+          </label>
+          <button id="calculate-field" class="wide primary">Calculate new layer</button>
+          <p id="field-calculator-status" class="shape-help">Load topography, tomography, lithosphere, or compute gravity to begin.</p>
         </aside>
         <div id="empty-state" class="empty-state">
           <div class="empty-icon">＋</div>
@@ -922,7 +1012,59 @@
     <div id="example-grid" class="example-grid"></div>
   </dialog>
 
+  <dialog id="tutorial-dialog" class="examples-dialog tutorial-dialog">
+    <div class="dialog-header">
+      <div><small>VISUAL BUILDER LEARNING CENTER</small><h2>Tutorials and guided workflows</h2></div>
+      <button id="close-tutorials" class="ghost" aria-label="Close tutorials">Close</button>
+    </div>
+    <div class="tutorial-layout">
+      <aside class="tutorial-library" aria-label="Tutorial topics">
+        <label class="tutorial-search-label">Find a tutorial
+          <input id="tutorial-search" type="search" placeholder="Search features, GPlates, gravity…">
+        </label>
+        <div id="tutorial-topic-list" class="tutorial-topic-list"></div>
+        <button id="reset-tutorial-progress" class="ghost wide">Reset lesson progress</button>
+      </aside>
+      <section class="tutorial-detail" aria-live="polite">
+        <div class="tutorial-detail-heading">
+          <div>
+            <small id="tutorial-eyebrow">GETTING STARTED</small>
+            <h3 id="tutorial-title">Build your first model</h3>
+          </div>
+          <span id="tutorial-duration" class="tutorial-duration">5 min</span>
+        </div>
+        <p id="tutorial-summary" class="tutorial-summary"></p>
+        <figure class="tutorial-media">
+          <img id="tutorial-image" src="/assets/tutorials/workspace-overview.png" alt="">
+          <figcaption id="tutorial-image-caption"></figcaption>
+        </figure>
+        <ol id="tutorial-step-list" class="tutorial-step-list"></ol>
+        <div class="tutorial-detail-actions">
+          <button id="start-guided-tutorial" class="primary">Start guided tutorial</button>
+          <button id="mark-tutorial-complete" class="ghost">Mark as complete</button>
+        </div>
+      </section>
+    </div>
+  </dialog>
+
+  <div id="guided-tour" class="guided-tour hidden" aria-hidden="true">
+    <div id="guided-tour-shade" class="guided-tour-shade"></div>
+    <div id="guided-tour-focus" class="guided-tour-focus" aria-hidden="true"></div>
+    <section id="guided-tour-card" class="guided-tour-card" role="dialog" aria-modal="true" aria-labelledby="guided-tour-title">
+      <div class="guided-tour-card-heading">
+        <span id="guided-tour-progress">Step 1 of 4</span>
+        <button id="close-guided-tour" class="ghost" aria-label="Exit guided tutorial">×</button>
+      </div>
+      <h3 id="guided-tour-title">Choose a feature</h3>
+      <p id="guided-tour-copy"></p>
+      <div class="guided-tour-actions">
+        <button id="guided-tour-previous" class="ghost">Previous</button>
+        <button id="guided-tour-next" class="primary">Next</button>
+      </div>
+    </section>
+  </div>
+
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="app.js?v=69"></script>
+  <script type="module" src="app.js?v=85"></script>
 </body>
 </html>

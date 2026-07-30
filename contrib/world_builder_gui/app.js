@@ -2,13 +2,15 @@ import {
   FEATURE_TYPES, DEFAULT_SETTINGS, createFeature, buildWorldBuilder, buildGrid, buildVtp,
   buildLegacyVtk, buildObj, buildGeoJson, buildGeometryCsv,
   connectFeatures, validateProject, importWorldBuilder, importFeature,
-  applyGridConfig, featureToWorldBuilder, geologicalLayerPreset, createPlacementPoints
+  applyGridConfig, featureToWorldBuilder, geologicalLayerPreset, createPlacementPoints,
+  deriveSubductionDipPoint, applyFieldOperation
 } from "./core.js";
 import { TOMOGRAPHY_CATALOG, searchTomographyModels, tomographyModelById } from "./tomography-catalog.mjs";
 import { LITHOSPHERE_CATALOG, searchLithosphereModels, lithosphereModelById } from "./lithosphere-catalog.mjs";
 import { parseLithosphereTable, regularLithosphereGrid, remapGeographicGridToCartesian } from "./lithosphere-table.mjs";
 import { parseWorldBuilderText, serializeWorldBuilder } from "./wb-provenance.mjs";
 import { PLANETARY_BODY_CATALOG, searchPlanetaryBodies, planetaryBodyById } from "./planetary-catalog.mjs";
+import { gwbRuntime } from "./gwb-runtime.mjs";
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
 const COLOR_MAP_VERSION = 4;
@@ -23,7 +25,8 @@ const DEFAULT_TOPOGRAPHY = {
 };
 const DEFAULT_PALEOGEOGRAPHY = {
   model: "MULLER2022", age: 100, anchorPlateId: 0, visible: true,
-  source: null, layers: {}
+  source: null, layers: {},
+  layerVisibility: { coastlines: true, subduction: true, boundaries: true }
 };
 const DEFAULT_GRAVITY = {
   enabled: false, field: "bouguer", referenceDensity: 3300, topographyDensity: 2670,
@@ -76,7 +79,7 @@ const DEFAULT_COLOR_MAPS = {
 const DEFAULT_SCENE_LAYERS = {
   grid: true, features: true, labels: true, connections: true, slabs: true,
   topography: true, paleogeography: true, referenceMap: true, tomography: true,
-  lithosphere: true, gravity: true, legend: true
+  lithosphere: true, gravity: true, computedThermal: true, legend: true
 };
 const DEFAULT_UI = {
   paletteCollapsed: false, inspectorCollapsed: false, splitView: false,
@@ -104,11 +107,100 @@ let renderOptions = {
 };
 const wrap = document.querySelector("#canvas-wrap");
 let state = loadState();
+const TUTORIAL_PROGRESS_KEY = "gwb-visual-builder-tutorial-progress-v1";
+const TUTORIALS = [
+  {
+    id: "getting-started", eyebrow: "GETTING STARTED", title: "Build your first model", shortTitle: "First model",
+    icon: "⌁", duration: "5 min", image: "/assets/tutorials/workspace-overview.png",
+    caption: "The main workflow moves from the feature library, through the model grid, to physical properties and export.",
+    summary: "Learn the complete Visual Builder workflow without changing your current project: choose a feature, place it, edit its geometry and physical parameters, inspect the model, and export a World Builder file.",
+    steps: [
+      { title: "Choose a feature", copy: "The feature library contains plates, subduction zones, faults, mantle layers, and plumes. Click for automatic placement or drag onto a precise location.", target: "#feature-palette", prepare: "features" },
+      { title: "Place it on the grid", copy: "The plan view is the main geometry editor. Drag a feature, its individual vertices, thickness handle, or layer boundaries.", target: "#model-canvas", prepare: "plan" },
+      { title: "Define physical properties", copy: "The properties panel controls geometry, layers, temperature, composition, density, and feature-specific parameters.", target: ".inspector", prepare: "inspector" },
+      { title: "Export the model", copy: "Validation runs continuously. Export the generated .wb file when the geometry and parameters are ready.", target: "#download-wb", prepare: "none" }
+    ]
+  },
+  {
+    id: "features", eyebrow: "GEOMETRY", title: "Place and edit geological features", shortTitle: "Features",
+    icon: "◇", duration: "7 min", image: "/assets/tutorials/features-and-properties.png",
+    caption: "Placement shapes create a useful starting outline; every vertex and physical parameter remains editable.",
+    summary: "Build continental and oceanic plates, subduction zones, faults, mantle layers, and plumes. Learn placement shapes, vertex editing, direct resizing, internal layers, and grouped properties.",
+    steps: [
+      { title: "Choose the starting shape", copy: "Select rectangular, elliptical, wedge, irregular, curved, or segmented placement before adding the feature.", target: ".placement-shape-picker", prepare: "features" },
+      { title: "Add or drag a feature", copy: "Click a feature for automatic placement or drag it from the library to the desired position.", target: ".feature-card[data-model=\"continental plate\"]", prepare: "features" },
+      { title: "Edit the outline", copy: "Select the feature and drag visible vertices. Double-click an edge to add a vertex; Delete removes the selected vertex.", target: "#model-canvas", prepare: "plan" },
+      { title: "Edit layers and physics", copy: "Use Properties for layer thicknesses, names, densities, temperatures, compositions, velocity, dip, and feature-specific models.", target: ".inspector", prepare: "inspector" }
+    ]
+  },
+  {
+    id: "topography", eyebrow: "SURFACE FIELD", title: "Create and paint topography", shortTitle: "Topography",
+    icon: "⌇", duration: "6 min", image: "/assets/tutorials/topography-tools.png",
+    caption: "Procedural terrain, brush editing, ETOPO, PaleoDEM, and isostatic surfaces share one editable elevation field.",
+    summary: "Generate procedural landscapes, sculpt elevations with a brush, import geographic relief, and understand how active topography is converted to feature-compatible GWB surface models.",
+    steps: [
+      { title: "Open Topography", copy: "The Topography tab groups procedural terrain, sculpting, real-data import, paleogeography, and density/isostasy controls.", target: "[data-palette-tab=\"topography\"]", prepare: "topography" },
+      { title: "Choose a brush", copy: "Elevate, depress, or smooth terrain directly on the plan view. Select area applies the current strength to a bounded region.", target: ".terrain-tool-grid", prepare: "topography" },
+      { title: "Set radius and strength", copy: "Brush radius controls the affected area; strength controls the elevation change per pass.", target: "#terrain-brush", prepare: "topography" },
+      { title: "Paint on the model", copy: "Press and drag over the model grid. The elevation scale and 3D surface update with the active topography.", target: "#model-canvas", prepare: "plan" }
+    ]
+  },
+  {
+    id: "gplates", eyebrow: "PALEOGEOGRAPHY", title: "Import a GPlates reconstruction", shortTitle: "GPlates",
+    icon: "◎", duration: "9 min", image: "/assets/tutorials/gplates-workflow.png",
+    caption: "Choose reconstruction age and vector families before converting visible continents, boundaries, and subduction zones into GWB features.",
+    summary: "Load an EarthByte/GPlates reconstruction, choose an age and anchor plate, control visible feature families, convert them to editable GWB geometry, and review subduction polarity.",
+    steps: [
+      { title: "Open the reconstruction tools", copy: "GPlates and EarthByte controls are located in the Topography tab under Paleogeography.", target: ".paleogeography-source", prepare: "gplates" },
+      { title: "Choose model and age", copy: "Select a plate reconstruction model, geological age, and anchor plate appropriate for the scientific problem.", target: "#paleo-model", prepare: "gplates" },
+      { title: "Select feature families", copy: "Continents, subduction zones, and plate boundaries can be loaded and toggled independently.", target: ".paleo-layer-grid", prepare: "gplates" },
+      { title: "Convert visible vectors", copy: "Convert the currently visible vectors into grouped, editable Visual Builder features, then inspect their individual properties.", target: "#convert-paleo-features", prepare: "gplates" }
+    ]
+  },
+  {
+    id: "tomography", eyebrow: "EARTH STRUCTURE", title: "Explore tomography and extract a feature", shortTitle: "Tomography",
+    icon: "◉", duration: "8 min", image: "/assets/tutorials/tomography-explorer.png",
+    caption: "Numerical dVs or dVp depth slices can guide geometry and supply an editable iso-boundary.",
+    summary: "Browse tomography models, load a numerical depth slice, change the displayed scalar and colour range, inspect anomalies, and convert a selected iso-region into editable feature geometry.",
+    steps: [
+      { title: "Open Tomography", copy: "Tomography is available from the Data menu and opens as a movable explorer over the model.", target: "#tomography-editor", prepare: "tomography" },
+      { title: "Choose a model and depth", copy: "Select the model, depth, geographic bounds, and sampling resolution for the numerical slice.", target: "#tomography-model", prepare: "tomography" },
+      { title: "Choose dVs or dVp", copy: "Switch the scalar field, conversion ratio, colour range, iso-value, and anomaly direction.", target: "#tomography-scalar-field", prepare: "tomography" },
+      { title: "Create editable geometry", copy: "The largest selected iso-region can be converted into a normal Visual Builder feature and refined manually.", target: "#tomography-create-feature", prepare: "tomography" }
+    ]
+  },
+  {
+    id: "sections", eyebrow: "MODEL INSPECTION", title: "Draw, edit, and inspect sections", shortTitle: "Sections and 3D",
+    icon: "⌁", duration: "6 min", image: "/assets/tutorials/sections-3d.png",
+    caption: "A curved plan-view path drives the depth section while 3D and section views remain available in a split layout.",
+    summary: "Trace a straight or curved section, edit or delete its control points, inspect current topography and internal layers with depth, and compare plan, section, and 3D views.",
+    steps: [
+      { title: "Start a section path", copy: "Choose Draw section, then click two or more plan-view points. Additional points create a curved section.", target: "[data-tool=\"section\"]", prepare: "plan" },
+      { title: "Edit the path", copy: "Choose Edit section, drag its control points, click to add bends, remove selected points, or delete the complete path.", target: "#section-actions", prepare: "section" },
+      { title: "Open the depth section", copy: "Depth section shows feature layers, non-uniform contours, temperature, and the current topographic surface along the path.", target: "[data-view=\"section\"]", prepare: "none" },
+      { title: "Compare synchronized views", copy: "Split the screen to keep plan, 3D, or depth views side by side and optionally link their cameras.", target: "#toggle-split-view", prepare: "none" }
+    ]
+  },
+  {
+    id: "gravity", eyebrow: "POTENTIAL FIELDS", title: "Use the gravity workspace", shortTitle: "Gravity",
+    icon: "∇", duration: "10 min", image: "/assets/tutorials/gravity-workspace.png",
+    caption: "Map, 3D, and section panes compare predicted fields with the editable geological model.",
+    summary: "Configure the gravity preview, choose free-air, Bouguer, residual, or tensor components, compare map and section profiles, edit contours, and recompute the signal.",
+    steps: [
+      { title: "Open Gravity", copy: "Gravity is available from the Data menu and opens a movable configuration panel.", target: "#gravity-editor", prepare: "gravity" },
+      { title: "Choose the displayed field", copy: "Select free-air, Bouguer, residual gravity, or one of the gravity-gradient tensor components.", target: "#gravity-field", prepare: "gravity" },
+      { title: "Compute and open the workspace", copy: "Enable the overlay, compute the preview, then open the dedicated map, 3D, and section workspace.", target: "#open-gravity-workspace", prepare: "gravity" },
+      { title: "Interpret and edit", copy: "Draw a profile, switch to contours-only, drag feature vertices, and compare the recalculated anomaly with the section structure.", target: "#open-gravity-workspace", prepare: "gravity" }
+    ]
+  }
+];
 let selectedId = null;
 let selectedIds = new Set();
 let tool = "select";
 let connectingFrom = null;
 let sectionDraft = [];
+let selectedSectionPointIndex = null;
+let sectionPathDrag = null;
 let drag = null;
 let outputKind = "wb";
 let viewMode = "plan";
@@ -124,6 +216,8 @@ let referenceImage = null;
 let tomographyRequest = null;
 let lithosphereTable = null;
 let topographyImage = null;
+let computedModel = null;
+let computationAbortController = null;
 let terrainDrawing = false;
 let terrainSelection = [];
 let cameraPanMode = false;
@@ -134,9 +228,15 @@ let gravityWorkspaceDrag = null;
 let gravityWorkspaceGeometryDrag = null;
 let gravityLegendDrag = null;
 let gravityLegendBounds = { primary: null, secondary: null };
+let sectionContourDrag = null;
+let selectedSectionContour = null;
+const sectionInteractionGeometry = new Map();
 let floatingEditorDrag = null;
 let floatingEditorZ = 10;
 let researchTimer = null;
+let activeTutorialId = TUTORIALS[0].id;
+let guidedTutorial = null;
+let guidedTutorialStep = 0;
 let activitySequence = 0;
 let activityHideTimer = null;
 let activeViewport = "primary";
@@ -201,6 +301,7 @@ function loadState() {
       }
       saved.colorMapVersion = COLOR_MAP_VERSION;
       saved.layerGroups = Array.isArray(saved.layerGroups) ? saved.layerGroups : [];
+      saved.derivedFields = Array.isArray(saved.derivedFields) ? saved.derivedFields : [];
       saved.ui = { ...DEFAULT_UI, ...(saved.ui || {}) };
       saved.ui.gravityLegendPositions = {
         primary: saved.ui.gravityLegendPositions?.primary || null,
@@ -217,7 +318,7 @@ function loadState() {
     gravity: { ...DEFAULT_GRAVITY }, tomography: { ...DEFAULT_TOMOGRAPHY }, lithosphere: { ...DEFAULT_LITHOSPHERE },
     provenance: { tomographyModelIds: [], lithosphereModelIds: [] }, exportOptions: { ...DEFAULT_EXPORT_OPTIONS },
     colorMaps: structuredClone(DEFAULT_COLOR_MAPS), colorMapVersion: COLOR_MAP_VERSION,
-    layerGroups: [], ui: { ...DEFAULT_UI }, sectionPath: []
+    layerGroups: [], derivedFields: [], ui: { ...DEFAULT_UI }, sectionPath: []
   };
 }
 
@@ -297,6 +398,7 @@ function restoreProjectStateDocument(documentState) {
     exportOptions: { ...DEFAULT_EXPORT_OPTIONS, ...(restored.exportOptions || {}) },
     colorMapVersion: COLOR_MAP_VERSION,
     layerGroups: Array.isArray(restored.layerGroups) ? restored.layerGroups : [],
+    derivedFields: Array.isArray(restored.derivedFields) ? restored.derivedFields : [],
     ui: {
       ...DEFAULT_UI,
       ...(restored.ui || {}),
@@ -327,6 +429,7 @@ function restoreProjectStateDocument(documentState) {
   selectedPointIndex = null;
   referenceImage = null;
   topographyImage = null;
+  computedModel = null;
   undoStack = [];
   redoStack = [];
   lastHistorySignature = "";
@@ -335,6 +438,7 @@ function restoreProjectStateDocument(documentState) {
   syncSettingsForm();
   syncAppearanceEditor();
   syncGravityUI();
+  syncComputationUI();
   updateTopographyUI();
   updatePaleoUI();
   updatePlacementShapeUI();
@@ -350,7 +454,8 @@ function projectSnapshot() {
     settings: state.settings,
     features: state.features,
     connections: state.connections,
-    rawWorld: state.rawWorld
+    rawWorld: state.rawWorld,
+    sectionPath: state.sectionPath
   });
 }
 
@@ -379,6 +484,9 @@ function restoreProjectSnapshot(snapshot) {
   state.features = restored.features;
   state.connections = restored.connections;
   state.rawWorld = restored.rawWorld;
+  state.sectionPath = Array.isArray(restored.sectionPath)
+    ? restored.sectionPath.map(point => [...point])
+    : (state.settings.section || []).map(point => [...point]);
   if (!state.features.some(feature => feature.id === selectedId)) selectedId = state.features.at(-1)?.id || null;
   selectedIds = new Set([...selectedIds].filter(id => state.features.some(feature => feature.id === id)));
   if (!selectedIds.size && selectedId) selectedIds.add(selectedId);
@@ -607,6 +715,19 @@ function setActiveViewport(name) {
   updateCameraUI();
 }
 
+function setViewportMode(name, mode) {
+  setActiveViewport(name);
+  viewMode = mode;
+  viewportModes[name] = mode;
+  if (name === "secondary") {
+    state.ui.secondaryView = mode;
+    persist();
+  }
+  document.querySelectorAll("[data-view]").forEach(item => item.classList.toggle("active", item.dataset.view === mode));
+  canvas.style.cursor = mode === "three-d" ? "grab" : mode === "plan" && tool === "connect" ? "crosshair" : "default";
+  updateViewportLabels();
+}
+
 function updateViewportLabels() {
   const labels = { plan: "Plan", "three-d": "3D", section: "Depth" };
   document.querySelector('[data-activate-viewport="primary"]').textContent = `A · ${labels[viewportModes.primary]}`;
@@ -794,7 +915,8 @@ function featureFill(feature, points, alpha = .34) {
 }
 
 function drawTemperatureLegend(width, height) {
-  if (!sceneLayerVisible("legend") || state.appearance.renderMode !== "temperature") return;
+  const computedThermalVisible = sceneLayerVisible("computedThermal") && computedModel?.result?.temperature?.length;
+  if (!sceneLayerVisible("legend") || (state.appearance.renderMode !== "temperature" && !computedThermalVisible)) return;
   const x = Math.max(64, width - 220); const y = height - 44; const legendWidth = 180;
   const gradient = context.createLinearGradient(x, 0, x + legendWidth, 0);
   [[0, 273], [.2, 550], [.4, 850], [.6, 1150], [.78, 1450], [.92, 1700], [1, 1800]].forEach(([stop]) => {
@@ -812,13 +934,35 @@ function drawTemperatureLegend(width, height) {
   context.restore();
 }
 
+function drawMissingIsostasyNotice(width) {
+  const topography = state.topography;
+  const hasComputedSurface = String(topography?.source || "").startsWith("GWB WebAssembly")
+    && topography?.values?.length === topography.width * topography.height;
+  if (state.settings.topographyMode !== "isostatic" || hasComputedSurface) return;
+  const message = "ISOSTATIC TOPOGRAPHY NOT COMPUTED · Topography → Compute and display";
+  context.save();
+  context.font = "700 9px ui-monospace";
+  const noticeWidth = Math.min(width - 24, context.measureText(message).width + 24);
+  const x = Math.max(12, (width - noticeWidth) / 2);
+  context.fillStyle = state.appearance.theme === "light" ? "rgba(255,247,224,.96)" : "rgba(38,31,16,.94)";
+  context.strokeStyle = "#c79842";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.roundRect(x, 14, noticeWidth, 28, 8);
+  context.fill();
+  context.stroke();
+  context.fillStyle = state.appearance.theme === "light" ? "#815b18" : "#f0c56c";
+  context.fillText(message, x + 12, 32);
+  context.restore();
+}
+
 function formatElevation(value) {
   if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(Math.abs(value) >= 10000 ? 0 : 1)} km`;
   return `${Math.round(value)} m`;
 }
 
 function drawTopographyLegend(width, height) {
-  if (!sceneLayerVisible("legend") || !sceneLayerVisible("topography") || state.settings.topographyMode !== "terrain" || viewMode === "section") return;
+  if (!sceneLayerVisible("legend") || !sceneLayerVisible("topography") || !numericalTopographyVisible() || viewMode === "section") return;
   if (viewMode === "three-d" && state.settings.coordinateSystem === "spherical") return;
   const topography = state.topography;
   if (!topography?.values?.length || topography.values.length !== topography.width * topography.height) return;
@@ -826,7 +970,8 @@ function drawTopographyLegend(width, height) {
   const maximum = Math.max(...topography.values);
   const legendWidth = Math.min(180, width - 40);
   const x = 20;
-  const temperatureVisible = state.appearance.renderMode === "temperature";
+  const temperatureVisible = state.appearance.renderMode === "temperature"
+    || (sceneLayerVisible("computedThermal") && computedModel?.result?.temperature?.length);
   const y = height - (temperatureVisible ? 92 : 44);
   const gradient = context.createLinearGradient(x, 0, x + legendWidth, 0);
   for (let step = 0; step <= 10; step++) {
@@ -859,6 +1004,153 @@ function terrainBounds() {
     west: Number(state.settings.xMin), east: Number(state.settings.xMax),
     south: Number(state.settings.yMin), north: Number(state.settings.yMax)
   };
+}
+
+function ensureDerivedFields() {
+  state.derivedFields = Array.isArray(state.derivedFields) ? state.derivedFields : [];
+  return state.derivedFields;
+}
+
+function normalizedCalculatorGrid(id, label, grid, unit = "") {
+  if (!grid?.values?.length || !Number(grid.nx) || !Number(grid.ny)) return null;
+  return {
+    id, label, unit, nx: Number(grid.nx), ny: Number(grid.ny),
+    values: Array.from(grid.values, Number),
+    west: Number(grid.west), east: Number(grid.east),
+    south: Number(grid.south), north: Number(grid.north)
+  };
+}
+
+function calculatorSources() {
+  const sources = [];
+  const topography = state.topography;
+  if (topography?.values?.length === Number(topography.width) * Number(topography.height)) {
+    const bounds = terrainBounds();
+    sources.push(normalizedCalculatorGrid("topography", `Topography · ${topography.source || "surface field"}`, {
+      nx: topography.width, ny: topography.height, values: topography.values, ...bounds
+    }, "m"));
+  }
+  const tomography = state.tomography?.grid;
+  if (tomography?.values?.length) {
+    sources.push(normalizedCalculatorGrid("tomography", `Tomography · ${tomographyScalarLabel()} · ${tomography.depth ?? "?"} km`, {
+      ...tomography, values: tomography.values.map(tomographyScalarValue)
+    }, "%"));
+  }
+  const lithosphere = state.lithosphere?.grid;
+  if (lithosphere?.values?.length) {
+    sources.push(normalizedCalculatorGrid("lithosphere", `Lithosphere · ${String(lithosphere.field || "field").replaceAll("_", " ")}`, lithosphere, lithosphere.unit || ""));
+  }
+  const gravity = state.gravity;
+  if (gravity?.result?.values?.length) {
+    sources.push(normalizedCalculatorGrid("gravity", `Gravity · ${gravityFieldLabel(gravity.field)}`, {
+      ...gravity.result,
+      west: Number(state.settings.xMin), east: Number(state.settings.xMax),
+      south: Number(state.settings.yMin), north: Number(state.settings.yMax)
+    }, gravity.result.unit || ""));
+  }
+  ensureDerivedFields().forEach(field => {
+    const source = normalizedCalculatorGrid(`derived:${field.id}`, `Calculated · ${field.name}`, field, field.unit || "");
+    if (source) sources.push(source);
+  });
+  return sources.filter(Boolean);
+}
+
+function sampleCalculatorGrid(grid, x, y) {
+  if (!grid || x < grid.west || x > grid.east || y < grid.south || y > grid.north) return NaN;
+  const column = (x - grid.west) / Math.max(Number.EPSILON, grid.east - grid.west) * (grid.nx - 1);
+  const row = (grid.north - y) / Math.max(Number.EPSILON, grid.north - grid.south) * (grid.ny - 1);
+  const x0 = Math.floor(column); const x1 = Math.min(grid.nx - 1, x0 + 1);
+  const y0 = Math.floor(row); const y1 = Math.min(grid.ny - 1, y0 + 1);
+  const tx = column - x0; const ty = row - y0;
+  const values = [
+    grid.values[y0 * grid.nx + x0], grid.values[y0 * grid.nx + x1],
+    grid.values[y1 * grid.nx + x0], grid.values[y1 * grid.nx + x1]
+  ];
+  if (!values.every(Number.isFinite)) return NaN;
+  const upper = values[0] * (1 - tx) + values[1] * tx;
+  const lower = values[2] * (1 - tx) + values[3] * tx;
+  return upper * (1 - ty) + lower * ty;
+}
+
+function fieldOperationLabel(operation) {
+  return {
+    subtract: "A − B", "reverse-subtract": "B − A", add: "A + B",
+    multiply: "A × B", divide: "A ÷ B", gradient: "|∇A|",
+    "gradient-x": "∂A/∂x", "gradient-y": "∂A/∂y",
+    "scale-offset": "A × scale + offset", absolute: "|A|"
+  }[operation] || operation;
+}
+
+function calculateDerivedField() {
+  const sourceMap = new Map(calculatorSources().map(source => [source.id, source]));
+  const sourceA = sourceMap.get(document.querySelector("#calculator-source-a").value);
+  const operation = document.querySelector("#calculator-operation").value;
+  const sourceB = sourceMap.get(document.querySelector("#calculator-source-b").value);
+  const binary = ["subtract", "reverse-subtract", "add", "multiply", "divide"].includes(operation);
+  const status = document.querySelector("#field-calculator-status");
+  if (!sourceA || (binary && !sourceB)) {
+    status.textContent = "Load the required numerical source fields first.";
+    return;
+  }
+  const dx = (sourceA.east - sourceA.west) / Math.max(1, sourceA.nx - 1);
+  const dy = (sourceA.north - sourceA.south) / Math.max(1, sourceA.ny - 1);
+  const sampledB = binary ? sourceA.values.map((_, index) => {
+    const column = index % sourceA.nx; const row = Math.floor(index / sourceA.nx);
+    return sampleCalculatorGrid(sourceB, sourceA.west + column * dx, sourceA.north - row * dy);
+  }) : [];
+  let values;
+  try {
+    values = applyFieldOperation(sourceA.values, sampledB, {
+      operation, nx: sourceA.nx, ny: sourceA.ny, dx, dy,
+      scale: Number(document.querySelector("#calculator-scale").value),
+      offset: Number(document.querySelector("#calculator-offset").value)
+    });
+  } catch (error) {
+    status.textContent = error.message;
+    return;
+  }
+  const finite = values.filter(Number.isFinite);
+  if (!finite.length) {
+    status.textContent = "The operation produced no finite values in the overlapping domain.";
+    return;
+  }
+  const nameInput = document.querySelector("#calculator-result-name");
+  const name = nameInput.value.trim() || `${sourceA.label} · ${fieldOperationLabel(operation)}`;
+  const coordinateUnit = state.settings.coordinateSystem === "spherical" ? "°" : "m";
+  let unit = sourceA.unit;
+  if (["gradient", "gradient-x", "gradient-y"].includes(operation)) unit = `${sourceA.unit || "value"}/${coordinateUnit}`;
+  else if (operation === "multiply") unit = [sourceA.unit, sourceB?.unit].filter(Boolean).join("·");
+  else if (operation === "divide") unit = sourceB?.unit ? `${sourceA.unit || "value"}/${sourceB.unit}` : sourceA.unit;
+  else if (binary && sourceA.unit !== sourceB?.unit) unit = "";
+  ensureDerivedFields().push({
+    id: crypto.randomUUID(), name, operation, sourceA: sourceA.id, sourceB: sourceB?.id || null,
+    nx: sourceA.nx, ny: sourceA.ny, values,
+    west: sourceA.west, east: sourceA.east, south: sourceA.south, north: sourceA.north,
+    min: Math.min(...finite), max: Math.max(...finite), unit, visible: true, opacity: 72
+  });
+  nameInput.value = "";
+  status.textContent = `Created “${name}” with ${finite.length.toLocaleString()} finite samples.`;
+  persist(); renderLayersPanel(); syncFieldCalculator(); draw();
+  showToast(`Calculated layer created · ${name}`);
+}
+
+function syncFieldCalculator() {
+  const sourceA = document.querySelector("#calculator-source-a");
+  const sourceB = document.querySelector("#calculator-source-b");
+  if (!sourceA || !sourceB) return;
+  const previousA = sourceA.value; const previousB = sourceB.value;
+  const sources = calculatorSources();
+  const options = sources.map(source => `<option value="${escapeHtml(source.id)}">${escapeHtml(source.label)} (${source.nx}×${source.ny})</option>`).join("");
+  sourceA.innerHTML = options || `<option value="">No numerical fields loaded</option>`;
+  sourceB.innerHTML = options || `<option value="">No numerical fields loaded</option>`;
+  if (sources.some(source => source.id === previousA)) sourceA.value = previousA;
+  if (sources.some(source => source.id === previousB)) sourceB.value = previousB;
+  if (sourceB.value === sourceA.value && sources.length > 1) sourceB.selectedIndex = 1;
+  const operation = document.querySelector("#calculator-operation").value;
+  const binary = ["subtract", "reverse-subtract", "add", "multiply", "divide"].includes(operation);
+  document.querySelector("#calculator-source-b-row").classList.toggle("hidden", !binary);
+  document.querySelector("#calculator-scale-row").classList.toggle("hidden", operation !== "scale-offset");
+  document.querySelector("#calculate-field").disabled = !sources.length || (binary && sources.length < 2);
 }
 
 function geographicSourceBounds() {
@@ -910,6 +1202,11 @@ function ensureTopography() {
   return state.topography;
 }
 
+function numericalTopographyVisible() {
+  return state.settings.topographyMode === "terrain"
+    || String(state.topography?.source || "").startsWith("GWB WebAssembly");
+}
+
 function terrainIndex(column, row, topography = state.topography) {
   return Math.max(0, Math.min(topography.height - 1, row)) * topography.width
     + Math.max(0, Math.min(topography.width - 1, column));
@@ -940,6 +1237,246 @@ function sampleTopographyValue([x, y], topography = state.topography) {
   const bottom = topography.values[terrainIndex(c0, r1, topography)] * (1 - tx)
     + topography.values[terrainIndex(c1, r1, topography)] * tx;
   return top * (1 - ty) + bottom * ty;
+}
+
+function modelComputationSignature() {
+  return JSON.stringify({
+    settings: state.settings,
+    features: state.features,
+    rawWorld: state.rawWorld
+  });
+}
+
+function computedTemperatureRange(result = computedModel?.result) {
+  if (!result?.temperature?.length) return { min: 0, max: 0 };
+  let min = Infinity; let max = -Infinity;
+  result.temperature.forEach(value => {
+    if (!Number.isFinite(value)) return;
+    min = Math.min(min, value); max = Math.max(max, value);
+  });
+  return { min: Number.isFinite(min) ? min : 0, max: Number.isFinite(max) ? max : 0 };
+}
+
+function syncComputationUI() {
+  const depth = document.querySelector("#computation-depth");
+  if (!depth) return;
+  const sampling = document.querySelector("#computation-sampling")?.value || "uniform";
+  document.querySelector("#adaptive-computation-options")
+    ?.classList.toggle("hidden", sampling !== "adaptive");
+  const maximumDepth = Math.max(1, (Number(state.settings.zMax) - Number(state.settings.zMin)) / 1000);
+  depth.max = String(maximumDepth);
+  depth.value = String(Math.min(maximumDepth, Number(depth.value) || Math.min(100, maximumDepth)));
+  const result = document.querySelector("#computation-result");
+  if (!computedModel) {
+    result.textContent = "No sampled model in this session";
+    return;
+  }
+  const thermal = computedTemperatureRange();
+  const stale = computedModel.signature !== modelComputationSignature();
+  const meshDescription = computedModel.result.adaptive
+    ? `${Number(computedModel.result.leafCellCount).toLocaleString()} adaptive cells`
+      + ` · level ${computedModel.result.adaptiveMaximumLevel}`
+      + `${computedModel.result.cellLimitReached ? " · cell limit reached" : ""}`
+    : `${computedModel.result.cells.join("×")} cells`;
+  result.textContent = `${meshDescription} · ${thermal.min.toFixed(1)}–${thermal.max.toFixed(1)} K`
+    + `${computedModel.topographyRange ? ` · topography ${computedModel.topographyRange.min.toFixed(0)}–${computedModel.topographyRange.max.toFixed(0)} m` : ""}`
+    + `${stale ? " · model changed: recompute recommended" : ""}`;
+}
+
+function computeIsostaticSurface(result) {
+  const nx = Number(result.cells[0]) + 1;
+  const ny = result.dimension === 3 ? Number(result.cells[1]) + 1 : 1;
+  const nz = Number(result.cells[2]) + 1;
+  const plane = nx * ny;
+  let sampledMaximumDepth = 0;
+  result.depthWrtReference.forEach(depth => {
+    if (Number.isFinite(depth)) sampledMaximumDepth = Math.max(sampledMaximumDepth, depth);
+  });
+  const compensationDepth = Math.min(
+    Number(state.settings.compensationDepth),
+    sampledMaximumDepth
+  );
+  const backgroundDensity = Number(state.settings.backgroundDensity) || 3300;
+  const columnIntegral = (column, row) => {
+    let integral = 0;
+    for (let layer = nz - 1; layer > 0; layer--) {
+      const shallowIndex = layer * plane + row * nx + column;
+      const deepIndex = (layer - 1) * plane + row * nx + column;
+      const shallowDepth = Math.max(0, Number(result.depthWrtReference[shallowIndex]));
+      const deepDepth = Math.max(shallowDepth, Number(result.depthWrtReference[deepIndex]));
+      if (shallowDepth >= compensationDepth) break;
+      const intervalBottom = Math.min(deepDepth, compensationDepth);
+      const interval = intervalBottom - shallowDepth;
+      if (!(interval > 0)) continue;
+      const shallowDensity = Number.isFinite(result.density[shallowIndex])
+        ? Number(result.density[shallowIndex]) : backgroundDensity;
+      const deepDensityRaw = Number.isFinite(result.density[deepIndex])
+        ? Number(result.density[deepIndex]) : backgroundDensity;
+      const fraction = deepDepth > shallowDepth
+        ? (intervalBottom - shallowDepth) / (deepDepth - shallowDepth) : 0;
+      const deepDensity = shallowDensity + fraction * (deepDensityRaw - shallowDensity);
+      integral += 0.5 * (shallowDensity + deepDensity) * interval;
+      if (intervalBottom >= compensationDepth) break;
+    }
+    return integral;
+  };
+  const referenceColumn = Math.max(0, Math.min(nx - 1, Math.round(
+    (Number(state.settings.referenceProfileX) - Number(state.settings.xMin))
+    / Math.max(Number.EPSILON, Number(state.settings.xMax) - Number(state.settings.xMin))
+    * (nx - 1)
+  )));
+  const referenceRow = result.dimension === 3
+    ? Math.max(0, Math.min(ny - 1, Math.round(
+      (Number(state.settings.referenceProfileY) - Number(state.settings.yMin))
+      / Math.max(Number.EPSILON, Number(state.settings.yMax) - Number(state.settings.yMin))
+      * (ny - 1)
+    )))
+    : 0;
+  const referenceIntegral = columnIntegral(referenceColumn, referenceRow);
+  const values = new Float64Array(plane);
+  for (let row = 0; row < ny; row++) {
+    for (let column = 0; column < nx; column++) {
+      // Equal pressure at compensation depth: a light column stands higher.
+      values[row * nx + column] =
+        (referenceIntegral - columnIntegral(column, row)) / backgroundDensity;
+    }
+  }
+  return values;
+}
+
+function applyComputedIsostaticTopography(result, isostaticSurface) {
+  const nx = Number(result.cells[0]) + 1;
+  const ny = result.dimension === 3 ? Number(result.cells[1]) + 1 : 1;
+  const values = [];
+  if (result.dimension === 3) {
+    for (let displayRow = 0; displayRow < ny; displayRow++) {
+      const sourceRow = ny - 1 - displayRow;
+      for (let column = 0; column < nx; column++) {
+        values.push(Number(isostaticSurface[sourceRow * nx + column]));
+      }
+    }
+  } else {
+    const row = Array.from({ length: nx }, (_, column) => Number(isostaticSurface[column]));
+    values.push(...row, ...row);
+  }
+  const finite = values.filter(Number.isFinite);
+  const topography = ensureTopography();
+  topography.width = nx;
+  topography.height = result.dimension === 3 ? ny : 2;
+  topography.values = values;
+  topography.bounds = {
+    west: Number(state.settings.xMin), east: Number(state.settings.xMax),
+    south: Number(state.settings.yMin), north: Number(state.settings.yMax)
+  };
+  topography.imageSrc = null;
+  topography.source = "GWB WebAssembly · isostatic topography";
+  topography.opacity = Number(document.querySelector("#computation-opacity").value);
+  return {
+    min: finite.length ? Math.min(...finite) : 0,
+    max: finite.length ? Math.max(...finite) : 0
+  };
+}
+
+async function runModelComputation(kind) {
+  if (gwbRuntime.busy) {
+    showToast("A GWB WebAssembly calculation is already running");
+    return;
+  }
+  if (kind === "isostatic") {
+    if (!state.features.some(feature => feature.densityEnabled)) {
+      const message = "Enable a density model on at least one feature before computing isostatic topography.";
+      document.querySelector("#computation-status").textContent = message;
+      showToast(message);
+      return;
+    }
+    state.settings.topographyMode = "isostatic";
+    syncSettingsForm();
+    updateTopographyUI();
+  }
+  const errors = validateProject(state.settings, state.features);
+  if (errors.length) {
+    document.querySelector("#computation-status").textContent = errors.join(" ");
+    showToast("Fix model validation errors before computing");
+    return;
+  }
+  const resolutionLimit = Math.max(8, Math.min(256, Number(document.querySelector("#computation-resolution").value) || 96));
+  const requestedSampling = document.querySelector("#computation-sampling")?.value || "uniform";
+  const sampling = kind === "isostatic" ? "uniform" : requestedSampling;
+  const adaptiveNumber = (selector, fallback) => {
+    const value = Number(document.querySelector(selector)?.value);
+    return Number.isFinite(value) ? value : fallback;
+  };
+  const adaptiveOptions = {
+    baseResolution: Math.max(1, Math.min(16,
+      adaptiveNumber("#computation-adaptive-base", 4))),
+    maxDepth: Math.max(0, Math.min(10,
+      adaptiveNumber("#computation-adaptive-depth", 4))),
+    maxCells: Math.max(1, Math.min(1000000,
+      adaptiveNumber("#computation-adaptive-cells", 100000))),
+    temperatureTolerance: Math.max(0,
+      adaptiveNumber("#computation-adaptive-temperature", 25)),
+    compositionTolerance: 0.05,
+    topographyTolerance: 250
+  };
+  const progress = document.querySelector("#computation-progress");
+  const progressFill = progress.querySelector("i");
+  const status = document.querySelector("#computation-status");
+  const cancel = document.querySelector("#cancel-computation");
+  computationAbortController = new AbortController();
+  cancel.classList.remove("hidden");
+  progress.setAttribute("aria-hidden", "false");
+  progressFill.style.width = "2%";
+  status.textContent = "Starting GWB WebAssembly worker…";
+  document.querySelectorAll("#compute-thermal-state, #compute-isostatic-topography").forEach(button => { button.disabled = true; });
+  try {
+    const world = buildWorldBuilder(state.settings, featuresWithTopography(), state.rawWorld);
+    const result = await gwbRuntime.run({
+      wbText: `${JSON.stringify(world, null, 2)}\n`,
+      gridText: `${buildGrid(state.settings)}output_density = true\n`,
+      resolutionLimit,
+      sampling,
+      adaptiveOptions
+    }, {
+      signal: computationAbortController.signal,
+      onProgress: ({ phase, progress: amount }) => {
+        progressFill.style.width = `${Math.round(amount * 100)}%`;
+        status.textContent = `${phase[0].toUpperCase()}${phase.slice(1)} model · ${Math.round(amount * 100)}%`;
+      }
+    });
+    computedModel = {
+      result,
+      kind,
+      signature: modelComputationSignature(),
+      opacity: Number(document.querySelector("#computation-opacity").value),
+      depthKm: Number(document.querySelector("#computation-depth").value)
+    };
+    if (kind === "isostatic") {
+      computedModel.isostaticSurface = computeIsostaticSurface(result);
+      computedModel.topographyRange = applyComputedIsostaticTopography(result, computedModel.isostaticSurface);
+      state.sceneLayers.topography = true;
+      updateTopographyUI();
+      status.textContent = "Isostatic topography balanced from GWB density columns and added as an editable scene layer.";
+    } else {
+      state.sceneLayers.computedThermal = true;
+      const range = computedTemperatureRange(result);
+      status.textContent = `${result.adaptive ? "Adaptive thermal state" : "Thermal state"} computed`
+        + ` · ${range.min.toFixed(1)}–${range.max.toFixed(1)} K`;
+    }
+    progressFill.style.width = "100%";
+    renderLayersPanel();
+    updateAll(false);
+    syncComputationUI();
+    showToast(kind === "isostatic" ? "GWB isostatic topography computed" : "GWB thermal state computed");
+  } catch (error) {
+    const cancelled = error?.name === "AbortError";
+    status.textContent = cancelled ? "Calculation cancelled." : `Calculation failed: ${error.message}`;
+    progressFill.style.width = "0%";
+    if (!cancelled) showToast(`GWB computation failed: ${error.message}`);
+  } finally {
+    computationAbortController = null;
+    cancel.classList.add("hidden");
+    document.querySelectorAll("#compute-thermal-state, #compute-isostatic-topography").forEach(button => { button.disabled = false; });
+  }
 }
 
 function ensureGravity() {
@@ -1169,6 +1706,54 @@ function drawGravityOverlay() {
     context.fillStyle = gravityColor(value, limit, Number(gravity.opacity) / 100);
     context.fillRect(topLeft[0], topLeft[1], bottomRight[0] - topLeft[0] + 1, bottomRight[1] - topLeft[1] + 1);
   });
+  context.restore();
+}
+
+function drawDerivedFields() {
+  ensureDerivedFields().filter(field => field.visible !== false && field.values?.length).forEach(field => {
+    const dx = (field.east - field.west) / Math.max(1, field.nx - 1);
+    const dy = (field.north - field.south) / Math.max(1, field.ny - 1);
+    context.save();
+    context.globalAlpha = Number(field.opacity ?? 72) / 100;
+    for (let row = 0; row < field.ny - 1; row++) {
+      const north = field.north - row * dy; const south = north - dy;
+      for (let column = 0; column < field.nx - 1; column++) {
+        const value = field.values[row * field.nx + column];
+        if (!Number.isFinite(value)) continue;
+        const west = field.west + column * dx; const east = west + dx;
+        const a = worldToCanvas([west, north]); const b = worldToCanvas([east, south]);
+        const amount = (value - field.min) / Math.max(Number.EPSILON, field.max - field.min);
+        const colorMap = ensureColorMaps().tomography;
+        const mappedValue = Number(colorMap.min) + Math.max(0, Math.min(1, amount)) * (Number(colorMap.max) - Number(colorMap.min));
+        context.fillStyle = `rgb(${scalarRgb("tomography", mappedValue, colorMap.min, colorMap.max).join(",")})`;
+        context.fillRect(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(b[0] - a[0]) + .7, Math.abs(b[1] - a[1]) + .7);
+      }
+    }
+    context.restore();
+  });
+}
+
+function drawDerivedFieldLegend(width) {
+  if (!sceneLayerVisible("legend") || viewMode === "section") return;
+  const field = ensureDerivedFields().filter(item => item.visible !== false && item.values?.length).at(-1);
+  if (!field) return;
+  const legendWidth = Math.min(190, width - 40);
+  const x = Math.max(20, width - legendWidth - 20); const y = 112;
+  const gradient = context.createLinearGradient(x, 0, x + legendWidth, 0);
+  colorMapStops("tomography").forEach((color, index, colors) =>
+    gradient.addColorStop(index / Math.max(1, colors.length - 1), color));
+  context.save();
+  context.fillStyle = "rgba(5,10,13,.76)"; context.fillRect(x - 10, y - 24, legendWidth + 20, 48);
+  context.fillStyle = "#edf3f0"; context.font = "700 8px ui-monospace";
+  const title = field.name.length > 28 ? `${field.name.slice(0, 27)}…` : field.name;
+  context.fillText(`CALCULATED · ${title.toUpperCase()}`, x, y - 11);
+  context.fillStyle = gradient; context.fillRect(x, y, legendWidth, 9);
+  context.strokeStyle = "#96a7ad"; context.strokeRect(x, y, legendWidth, 9);
+  context.font = "9px ui-monospace"; context.fillStyle = "#edf3f0";
+  const minimum = `${Number(field.min).toPrecision(4)}${field.unit ? ` ${field.unit}` : ""}`;
+  const maximum = `${Number(field.max).toPrecision(4)}${field.unit ? ` ${field.unit}` : ""}`;
+  context.fillText(minimum, x, y + 20);
+  context.fillText(maximum, x + legendWidth - context.measureText(maximum).width, y + 20);
   context.restore();
 }
 
@@ -1438,7 +2023,7 @@ function elevationColor(value, minimum, maximum, shade = 1) {
 }
 
 function drawTopographySurface() {
-  if (!sceneLayerVisible("topography") || state.settings.topographyMode !== "terrain") return;
+  if (!sceneLayerVisible("topography") || !numericalTopographyVisible()) return;
   const topography = state.topography;
   if (!topography) return;
   const bounds = terrainBounds();
@@ -1538,6 +2123,7 @@ function drawPaleogeography() {
   const [right, bottom] = worldToCanvas([state.settings.xMax, state.settings.yMin]);
   context.beginPath(); context.rect(left, top, right - left, bottom - top); context.clip();
   ["coastlines", "boundaries", "subduction"].forEach(layer => {
+    if (paleo.layerVisibility?.[layer] === false) return;
     const collection = paleo.layers?.[layer];
     if (!collection) return;
     const style = styles[layer];
@@ -1624,6 +2210,161 @@ function applyTerrainSelection(direction) {
   showToast(direction > 0 ? "Selection uplifted" : "Selection depressed");
 }
 
+function computedTemperatureAt(result, column, row, layer) {
+  const nx = Number(result.cells[0]) + 1;
+  const ny = result.dimension === 3 ? Number(result.cells[1]) + 1 : 1;
+  const nz = Number(result.cells[2]) + 1;
+  if (result.adaptive) {
+    return adaptiveTemperatureAt(
+      result,
+      Number(column) / Math.max(1, nx - 1),
+      result.dimension === 3
+        ? Number(row) / Math.max(1, ny - 1)
+        : 0,
+      Number(layer) / Math.max(1, nz - 1)
+    );
+  }
+  const i = Math.max(0, Math.min(nx - 1, Math.round(column)));
+  const j = Math.max(0, Math.min(ny - 1, Math.round(row)));
+  const k = Math.max(0, Math.min(nz - 1, Math.round(layer)));
+  return Number(result.temperature[k * nx * ny + j * nx + i]);
+}
+
+function adaptiveCellLookup(result) {
+  if (result._adaptiveCellLookup) return result._adaptiveCellLookup;
+  const lookup = new Map();
+  const base = Number(result.adaptiveBaseResolution);
+  for (let cell = 0; cell < result.cellLevels.length; cell++) {
+    const level = Number(result.cellLevels[cell]);
+    const scale = base * 2 ** level;
+    const offset = cell * 6;
+    const i = Math.round(result.cellBounds[offset] * scale);
+    const j = result.dimension === 3
+      ? Math.round(result.cellBounds[offset + 2] * scale)
+      : 0;
+    const k = Math.round(result.cellBounds[offset + 4] * scale);
+    lookup.set(`${level}:${i}:${j}:${k}`, cell);
+  }
+  result._adaptiveCellLookup = lookup;
+  return lookup;
+}
+
+function adaptiveTemperatureAt(result, u, v, w) {
+  const clampedU = Math.max(0, Math.min(1, Number(u)));
+  const clampedV = Math.max(0, Math.min(1, Number(v)));
+  const clampedW = Math.max(0, Math.min(1, Number(w)));
+  const base = Number(result.adaptiveBaseResolution);
+  const lookup = adaptiveCellLookup(result);
+  let cell = -1;
+  for (let level = Number(result.adaptiveMaximumLevel); level >= 0; level--) {
+    const scale = base * 2 ** level;
+    const i = Math.min(scale - 1, Math.floor(clampedU * scale));
+    const j = result.dimension === 3
+      ? Math.min(scale - 1, Math.floor(clampedV * scale))
+      : 0;
+    const k = Math.min(scale - 1, Math.floor(clampedW * scale));
+    const candidate = lookup.get(`${level}:${i}:${j}:${k}`);
+    if (candidate !== undefined) {
+      cell = candidate;
+      break;
+    }
+  }
+  if (cell < 0) return NaN;
+
+  const bounds = cell * 6;
+  const fraction = (value, lower, upper) =>
+    Math.max(0, Math.min(1, (value - lower) / Math.max(1e-15, upper - lower)));
+  const tx = fraction(clampedU, result.cellBounds[bounds], result.cellBounds[bounds + 1]);
+  const ty = result.dimension === 3
+    ? fraction(clampedV, result.cellBounds[bounds + 2], result.cellBounds[bounds + 3])
+    : 0;
+  const tz = fraction(clampedW, result.cellBounds[bounds + 4], result.cellBounds[bounds + 5]);
+  const vertices = result.dimension === 3 ? 8 : 4;
+  const connectivity = cell * vertices;
+  const value = corner => Number(result.temperature[result.connectivity[connectivity + corner]]);
+  if (result.dimension === 2) {
+    const bottom = value(0) * (1 - tx) + value(1) * tx;
+    const top = value(3) * (1 - tx) + value(2) * tx;
+    return bottom * (1 - tz) + top * tz;
+  }
+  const bottomSouth = value(0) * (1 - tx) + value(1) * tx;
+  const bottomNorth = value(3) * (1 - tx) + value(2) * tx;
+  const topSouth = value(4) * (1 - tx) + value(5) * tx;
+  const topNorth = value(7) * (1 - tx) + value(6) * tx;
+  const bottom = bottomSouth * (1 - ty) + bottomNorth * ty;
+  const top = topSouth * (1 - ty) + topNorth * ty;
+  return bottom * (1 - tz) + top * tz;
+}
+
+function drawComputedThermalPlan() {
+  if (!sceneLayerVisible("computedThermal") || !computedModel?.result?.temperature?.length) return;
+  const result = computedModel.result;
+  const nx = Number(result.cells[0]) + 1;
+  const ny = result.dimension === 3 ? Number(result.cells[1]) + 1 : 1;
+  const maxDepthKm = Math.max(1, (Number(state.settings.zMax) - Number(state.settings.zMin)) / 1000);
+  const depthKm = Math.max(0, Math.min(maxDepthKm,
+    Number(document.querySelector("#computation-depth")?.value ?? computedModel.depthKm ?? 0)));
+  computedModel.depthKm = depthKm;
+  const layer = Number(result.cells[2]) * (1 - depthKm / maxDepthKm);
+  const opacity = Number(document.querySelector("#computation-opacity")?.value ?? computedModel.opacity ?? 78) / 100;
+  const bounds = {
+    west: Number(state.settings.xMin), east: Number(state.settings.xMax),
+    south: Number(state.settings.yMin), north: Number(state.settings.yMax)
+  };
+  const topLeft = worldToCanvas([bounds.west, bounds.north]);
+  const bottomRight = worldToCanvas([bounds.east, bounds.south]);
+  const columns = Math.max(1, nx - 1);
+  const rows = result.dimension === 3 ? Math.max(1, ny - 1) : 1;
+  const cellWidth = (bottomRight[0] - topLeft[0]) / columns;
+  const cellHeight = (bottomRight[1] - topLeft[1]) / rows;
+  context.save();
+  context.globalAlpha = opacity;
+  for (let displayRow = 0; displayRow < rows; displayRow++) {
+    const sourceRow = result.dimension === 3 ? ny - 1 - displayRow : 0;
+    for (let column = 0; column < columns; column++) {
+      const temperature = computedTemperatureAt(result, column + .5, sourceRow - .5, layer);
+      context.fillStyle = `rgb(${temperatureRgb(temperature).join(",")})`;
+      context.fillRect(topLeft[0] + column * cellWidth, topLeft[1] + displayRow * cellHeight, cellWidth + 1, cellHeight + 1);
+    }
+  }
+  context.restore();
+  context.fillStyle = canvasPalette().text;
+  context.font = "700 9px ui-monospace";
+  context.fillText(`GWB THERMAL SLICE · ${depthKm.toFixed(0)} km`, topLeft[0] + 7, topLeft[1] + 14);
+}
+
+function drawComputedThermalSection(section, metrics, pad, plotWidth, plotHeight, maxDepth) {
+  if (!sceneLayerVisible("computedThermal") || !computedModel?.result?.temperature?.length) return;
+  const result = computedModel.result;
+  const nx = Number(result.cells[0]) + 1;
+  const ny = result.dimension === 3 ? Number(result.cells[1]) + 1 : 1;
+  const nzCells = Number(result.cells[2]);
+  const columns = Math.min(100, Math.max(24, Number(result.cells[0]) * 2));
+  const rows = Math.min(64, Math.max(16, nzCells));
+  const opacity = Number(document.querySelector("#computation-opacity")?.value ?? computedModel.opacity ?? 78) / 100;
+  context.save();
+  context.globalAlpha = opacity;
+  for (let row = 0; row < rows; row++) {
+    const depthFraction = (row + .5) / rows;
+    const layer = nzCells * (1 - depthFraction);
+    for (let column = 0; column < columns; column++) {
+      const distance = (column + .5) / columns * metrics.total;
+      const point = pointAlongSectionPath(distance, section, metrics);
+      const xFraction = (point[0] - Number(state.settings.xMin)) / Math.max(1e-12, Number(state.settings.xMax) - Number(state.settings.xMin));
+      const yFraction = (point[1] - Number(state.settings.yMin)) / Math.max(1e-12, Number(state.settings.yMax) - Number(state.settings.yMin));
+      const temperature = computedTemperatureAt(result, xFraction * (nx - 1), yFraction * (ny - 1), layer);
+      context.fillStyle = `rgb(${temperatureRgb(temperature).join(",")})`;
+      context.fillRect(
+        pad.left + column / columns * plotWidth,
+        pad.top + row / rows * plotHeight,
+        plotWidth / columns + 1,
+        plotHeight / rows + 1
+      );
+    }
+  }
+  context.restore();
+}
+
 function drawGrid(width, height) {
   const palette = canvasPalette();
   const pad = 42;
@@ -1635,8 +2376,10 @@ function drawGrid(width, height) {
   drawLithosphereGrid();
   drawTomographyGrid();
   drawTopographySurface();
+  drawComputedThermalPlan();
   drawPaleogeography();
   drawGravityOverlay();
+  drawDerivedFields();
   if (sceneLayerVisible("grid")) {
     context.strokeStyle = palette.grid;
     context.lineWidth = 1;
@@ -2043,6 +2786,15 @@ function drawSectionPath(path, draft = false) {
   context.beginPath(); context.moveTo(...points[0]); points.slice(1).forEach(point => context.lineTo(...point)); context.stroke();
   context.setLineDash([]);
   points.forEach((point, index) => {
+    const selected = draft && index === selectedSectionPointIndex;
+    if (selected) {
+      context.save();
+      context.fillStyle = "#102028";
+      context.strokeStyle = "#ffffff";
+      context.lineWidth = 2;
+      context.beginPath(); context.arc(...point, 8, 0, Math.PI * 2); context.fill(); context.stroke();
+      context.restore();
+    }
     context.beginPath(); context.arc(...point, draft ? 5 : 4, 0, Math.PI * 2); context.fill();
     if (points.length > 2) {
       context.font = "600 8px ui-monospace";
@@ -2064,8 +2816,18 @@ function syncSectionActions() {
   if (!actions) return;
   actions.classList.toggle("hidden", tool !== "section");
   document.querySelector("#section-point-count").textContent = `${sectionDraft.length} point${sectionDraft.length === 1 ? "" : "s"}`;
+  document.querySelector("#section-action-hint").textContent = sectionDraft.length
+    ? "Click to add bends · drag a point to move it · Delete removes the selected point"
+    : "Click two or more points to create a section";
   document.querySelector("#finish-section-path").disabled = sectionDraft.length < 2;
   document.querySelector("#undo-section-point").disabled = !sectionDraft.length;
+  document.querySelector("#remove-section-point").disabled =
+    selectedSectionPointIndex == null || sectionDraft.length <= 2;
+  document.querySelector("#delete-section-path").disabled =
+    sectionDraft.length === 0 && !(state.sectionPath?.length >= 2 || state.settings.section?.length >= 2);
+  const sectionButton = document.querySelector('[data-tool="section"]');
+  if (sectionButton) sectionButton.textContent =
+    state.sectionPath?.length >= 2 || state.settings.section?.length >= 2 ? "Edit section" : "Draw section";
 }
 
 function finishSectionPath() {
@@ -2076,6 +2838,8 @@ function finishSectionPath() {
   state.sectionPath = sectionDraft.map(point => [...point]);
   state.settings.section = [[...sectionDraft[0]], [...sectionDraft.at(-1)]];
   sectionDraft = [];
+  selectedSectionPointIndex = null;
+  sectionPathDrag = null;
   tool = "select";
   document.querySelectorAll("[data-tool]").forEach(item => item.classList.toggle("active", item.dataset.tool === "select"));
   syncSectionActions();
@@ -2085,10 +2849,38 @@ function finishSectionPath() {
 
 function cancelSectionPath() {
   sectionDraft = [];
+  selectedSectionPointIndex = null;
+  sectionPathDrag = null;
   tool = "select";
   document.querySelectorAll("[data-tool]").forEach(item => item.classList.toggle("active", item.dataset.tool === "select"));
   syncSectionActions();
   draw();
+}
+
+function removeSelectedSectionPoint() {
+  if (selectedSectionPointIndex == null) return showToast("Select a section point first");
+  if (sectionDraft.length <= 2) return showToast("A section needs at least two points");
+  sectionDraft.splice(selectedSectionPointIndex, 1);
+  selectedSectionPointIndex = Math.min(selectedSectionPointIndex, sectionDraft.length - 1);
+  syncSectionActions();
+  draw();
+  showToast("Section point removed");
+}
+
+function deleteSectionPath() {
+  const hadSection = sectionDraft.length || state.sectionPath?.length >= 2 || state.settings.section?.length >= 2;
+  if (!hadSection) return;
+  state.sectionPath = [];
+  state.settings.section = [];
+  sectionDraft = [];
+  selectedSectionPointIndex = null;
+  sectionPathDrag = null;
+  tool = "select";
+  document.querySelectorAll("[data-tool]").forEach(item =>
+    item.classList.toggle("active", item.dataset.tool === "select"));
+  syncSectionActions();
+  updateAll();
+  showToast("Section path deleted");
 }
 
 function drawDraftGeometry() {
@@ -2358,9 +3150,20 @@ function slabDirection(feature, spherical = false) {
     sum[0] + point[0] / feature.points.length,
     sum[1] + point[1] / feature.points.length
   ], [0, 0]);
+  if (spherical) {
+    const longitudeVector = feature.points.reduce((sum, point) => {
+      const longitude = Number(point[0]) * Math.PI / 180;
+      return [sum[0] + Math.cos(longitude), sum[1] + Math.sin(longitude)];
+    }, [0, 0]);
+    center[0] = Math.atan2(longitudeVector[1], longitudeVector[0]) * 180 / Math.PI;
+  }
   let dx = Number(feature.dipPoint?.[0] ?? center[0] + 1) - center[0];
   let dy = Number(feature.dipPoint?.[1] ?? center[1]) - center[1];
-  if (spherical) dx *= Math.cos(center[1] * Math.PI / 180);
+  if (spherical) {
+    while (dx > 180) dx -= 360;
+    while (dx < -180) dx += 360;
+    dx *= Math.cos(center[1] * Math.PI / 180);
+  }
   const length = Math.hypot(dx, dy) || 1;
   return [dx / length, dy / length];
 }
@@ -2586,7 +3389,7 @@ function drawSpherical3DView(width, height) {
 }
 
 function drawTopography3D() {
-  if (!sceneLayerVisible("topography") || state.settings.topographyMode !== "terrain") return;
+  if (!sceneLayerVisible("topography") || !numericalTopographyVisible()) return;
   const topography = state.topography;
   if (!topography?.values?.length || topography.values.length !== topography.width * topography.height) return;
   const bounds = terrainBounds();
@@ -2610,6 +3413,42 @@ function drawTopography3D() {
       context.strokeStyle = state.appearance.theme === "light" ? "rgba(55,75,82,.16)" : "rgba(225,238,234,.12)";
       context.lineWidth = .5;
       context.beginPath(); context.moveTo(...projected[0]); projected.slice(1).forEach(point => context.lineTo(...point)); context.closePath();
+      context.fill(); context.stroke();
+    }
+  }
+  context.restore();
+}
+
+function drawComputedThermal3D() {
+  if (!sceneLayerVisible("computedThermal") || !computedModel?.result?.temperature?.length
+    || state.settings.coordinateSystem === "spherical") return;
+  const result = computedModel.result;
+  const nx = Number(result.cells[0]) + 1;
+  const ny = result.dimension === 3 ? Number(result.cells[1]) + 1 : 2;
+  const maxDepthKm = Math.max(1, (Number(state.settings.zMax) - Number(state.settings.zMin)) / 1000);
+  const depthKm = Math.max(0, Math.min(maxDepthKm,
+    Number(document.querySelector("#computation-depth")?.value ?? computedModel.depthKm ?? 0)));
+  const layer = Number(result.cells[2]) * (1 - depthKm / maxDepthKm);
+  const opacity = Number(document.querySelector("#computation-opacity")?.value ?? computedModel.opacity ?? 78) / 100;
+  const xAt = index => Number(state.settings.xMin) + index / Math.max(1, nx - 1) * (Number(state.settings.xMax) - Number(state.settings.xMin));
+  const yAt = index => result.dimension === 3
+    ? Number(state.settings.yMin) + index / Math.max(1, ny - 1) * (Number(state.settings.yMax) - Number(state.settings.yMin))
+    : Number(state.settings.yMin) + index * (Number(state.settings.yMax) - Number(state.settings.yMin));
+  context.save();
+  context.globalAlpha = opacity;
+  for (let row = 0; row < ny - 1; row++) {
+    for (let column = 0; column < nx - 1; column++) {
+      const temperature = computedTemperatureAt(result, column + .5, result.dimension === 3 ? row + .5 : 0, layer);
+      const corners = [
+        project3D([xAt(column), yAt(row)], depthKm * 1000),
+        project3D([xAt(column + 1), yAt(row)], depthKm * 1000),
+        project3D([xAt(column + 1), yAt(row + 1)], depthKm * 1000),
+        project3D([xAt(column), yAt(row + 1)], depthKm * 1000)
+      ];
+      context.fillStyle = `rgb(${temperatureRgb(temperature).join(",")})`;
+      context.strokeStyle = "rgba(255,255,255,.08)";
+      context.lineWidth = .4;
+      context.beginPath(); context.moveTo(...corners[0]); corners.slice(1).forEach(point => context.lineTo(...point)); context.closePath();
       context.fill(); context.stroke();
     }
   }
@@ -2646,6 +3485,7 @@ function draw3DView(width, height) {
     }
   }
   drawTopography3D();
+  drawComputedThermal3D();
   drawGravity3DOverlay();
 
   for (const feature of state.features.filter(featureVisible)) {
@@ -2745,7 +3585,7 @@ function drawGravitySectionProfile(width, pad, plotWidth) {
 
 function sectionTopographyElevation(point) {
   const topography = state.topography;
-  if (!sceneLayerVisible("topography") || state.settings.topographyMode !== "terrain"
+  if (!sceneLayerVisible("topography") || !numericalTopographyVisible()
     || !topography?.values?.length || topography.values.length !== topography.width * topography.height) return null;
   const bounds = terrainBounds();
   const inside = point[0] >= bounds.west && point[0] <= bounds.east
@@ -2755,7 +3595,7 @@ function sectionTopographyElevation(point) {
 
 function sectionTopographySamples(section, metrics, count = 181) {
   const topography = state.topography;
-  if (!sceneLayerVisible("topography") || state.settings.topographyMode !== "terrain"
+  if (!sceneLayerVisible("topography") || !numericalTopographyVisible()
     || !topography?.values?.length || topography.values.length !== topography.width * topography.height) return [];
   return Array.from({ length: count }, (_, index) => {
     const fraction = index / Math.max(1, count - 1);
@@ -2822,6 +3662,235 @@ function drawSectionTopographyProfile(section, metrics, pad, plotWidth) {
   context.restore();
 }
 
+function defaultSectionDepthProfile(feature) {
+  const top = Number(feature.minDepth) || 0;
+  const bottom = Math.max(top + 1000, Number(feature.maxDepth) || top + featureThickness(feature));
+  return {
+    top: [[0, top], [.5, top], [1, top]],
+    bottom: [[0, bottom], [.5, bottom], [1, bottom]]
+  };
+}
+
+function sectionDepthProfile(feature, create = false) {
+  const valid = profile => Array.isArray(profile) && profile.length >= 2
+    && profile.every(point => Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])));
+  if (!feature.sectionDepthProfile || !valid(feature.sectionDepthProfile.top) || !valid(feature.sectionDepthProfile.bottom)) {
+    if (!create) return defaultSectionDepthProfile(feature);
+    feature.sectionDepthProfile = defaultSectionDepthProfile(feature);
+  }
+  ["top", "bottom"].forEach(contour => {
+    feature.sectionDepthProfile[contour] = feature.sectionDepthProfile[contour]
+      .map(point => [Math.max(0, Math.min(1, Number(point[0]))), Math.max(0, Number(point[1]))])
+      .sort((a, b) => a[0] - b[0]);
+  });
+  return feature.sectionDepthProfile;
+}
+
+function interpolateSectionContour(points, position) {
+  const u = Math.max(0, Math.min(1, position));
+  let upper = points.findIndex(point => point[0] >= u);
+  if (upper <= 0) return Number(points[0][1]);
+  if (upper < 0) return Number(points.at(-1)[1]);
+  const a = points[upper - 1]; const b = points[upper];
+  const amount = (u - a[0]) / Math.max(Number.EPSILON, b[0] - a[0]);
+  return Number(a[1]) + amount * (Number(b[1]) - Number(a[1]));
+}
+
+function sectionFeatureRange(feature, section, pad, plotWidth) {
+  const meta = FEATURE_TYPES[feature.model];
+  if (meta.geometry === "point") {
+    const center = projectPointToSectionPath(feature.points[0], section).fraction;
+    return { left: pad.left + center * plotWidth - 12, right: pad.left + center * plotWidth + 12 };
+  }
+  const fractions = feature.points.map(point => projectPointToSectionPath(point, section).fraction);
+  let left = pad.left + Math.min(...fractions) * plotWidth;
+  let right = pad.left + Math.max(...fractions) * plotWidth;
+  const minimumWidth = meta.geometry === "area" ? 60 : 28;
+  if (right - left < minimumWidth) {
+    const center = (left + right) / 2;
+    left = center - minimumWidth / 2; right = center + minimumWidth / 2;
+  }
+  return {
+    left: Math.max(pad.left, left),
+    right: Math.min(pad.left + plotWidth, right)
+  };
+}
+
+function sectionProfileDepth(feature, contour, position) {
+  return interpolateSectionContour(sectionDepthProfile(feature)[contour], position);
+}
+
+function sectionProfileY(feature, contour, position, pad, plotHeight, maxDepth) {
+  return pad.top + sectionProfileDepth(feature, contour, position) / maxDepth * plotHeight;
+}
+
+function traceSectionBand(feature, topRatio, bottomRatio, range, pad, plotHeight, maxDepth, steps = 32) {
+  const profile = sectionDepthProfile(feature);
+  const pointAt = (position, ratio) => {
+    const top = interpolateSectionContour(profile.top, position);
+    const bottom = interpolateSectionContour(profile.bottom, position);
+    return [
+      range.left + position * (range.right - range.left),
+      pad.top + (top + (bottom - top) * ratio) / maxDepth * plotHeight
+    ];
+  };
+  const upper = Array.from({ length: steps + 1 }, (_, index) => pointAt(index / steps, topRatio));
+  const lower = Array.from({ length: steps + 1 }, (_, index) => pointAt(index / steps, bottomRatio)).reverse();
+  context.beginPath();
+  context.moveTo(...upper[0]);
+  [...upper.slice(1), ...lower].forEach(point => context.lineTo(...point));
+  context.closePath();
+}
+
+function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plotHeight, maxDepth, geometry) {
+  const range = sectionFeatureRange(feature, section, pad, plotWidth);
+  const profile = sectionDepthProfile(feature);
+  const topDepth = Number(feature.minDepth) || 0;
+  const bottomDepth = Math.max(topDepth + 1, Number(feature.maxDepth) || topDepth + featureThickness(feature));
+  const depthSpan = Math.max(1, bottomDepth - topDepth);
+  if (!renderOptions.featureContoursOnly && feature.layers?.length) {
+    feature.layers.forEach((layer, layerIndex) => {
+      if (!featureSublayerVisible(feature, layerIndex)) return;
+      const layerTopRatio = Math.max(0, Math.min(1, (Number(layer.minDepth) - topDepth) / depthSpan));
+      const layerBottomRatio = Math.max(layerTopRatio, Math.min(1, (Number(layer.maxDepth) - topDepth) / depthSpan));
+      traceSectionBand(feature, layerTopRatio, layerBottomRatio, range, pad, plotHeight, maxDepth);
+      context.fillStyle = state.appearance.renderMode === "temperature"
+        ? temperatureColor(layer.temperature, .72)
+        : `hsla(${172 + layerIndex * 31}, 48%, 52%, .32)`;
+      context.fill();
+    });
+  } else if (!renderOptions.featureContoursOnly) {
+    traceSectionBand(feature, 0, 1, range, pad, plotHeight, maxDepth);
+    context.fillStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature), .42) : `${meta.color}45`;
+    context.fill();
+  }
+  traceSectionBand(feature, 0, 1, range, pad, plotHeight, maxDepth);
+  context.strokeStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature)) : meta.color;
+  context.lineWidth = featureIsSelected(feature.id) ? 3 : 2;
+  context.stroke();
+  const controls = [];
+  if (featureIsSelected(feature.id) && !renderOptions.suppressFeatureHandles) {
+    ["top", "bottom"].forEach(contour => profile[contour].forEach((control, index) => {
+      const point = [
+        range.left + control[0] * (range.right - range.left),
+        pad.top + Number(control[1]) / maxDepth * plotHeight
+      ];
+      controls.push({ featureId: feature.id, contour, index, point, range, pad, plotHeight, maxDepth });
+      context.beginPath();
+      context.arc(point[0], point[1], selectedSectionContour?.featureId === feature.id
+        && selectedSectionContour.contour === contour && selectedSectionContour.index === index ? 6 : 4.5, 0, Math.PI * 2);
+      context.fillStyle = contour === "top" ? "#f0ca66" : "#54b9a7";
+      context.strokeStyle = canvasPalette().deep;
+      context.lineWidth = 1.5;
+      context.fill(); context.stroke();
+    }));
+  }
+  geometry.regions.push({ featureId: feature.id, range, profile, pad, plotHeight, maxDepth });
+  geometry.handles.push(...controls);
+  return range;
+}
+
+function sectionHit(targetCanvas, point) {
+  const geometry = sectionInteractionGeometry.get(targetCanvas);
+  if (!geometry) return null;
+  const handle = geometry.handles.find(item => Math.hypot(point[0] - item.point[0], point[1] - item.point[1]) <= 10);
+  if (handle) return { type: "handle", ...handle };
+  const region = [...geometry.regions].reverse().find(item => {
+    if (point[0] < item.range.left || point[0] > item.range.right) return false;
+    const position = (point[0] - item.range.left) / Math.max(1, item.range.right - item.range.left);
+    const top = item.pad.top + interpolateSectionContour(item.profile.top, position) / item.maxDepth * item.plotHeight;
+    const bottom = item.pad.top + interpolateSectionContour(item.profile.bottom, position) / item.maxDepth * item.plotHeight;
+    return point[1] >= top - 6 && point[1] <= bottom + 6;
+  });
+  return region ? { type: "region", ...region } : null;
+}
+
+function beginSectionContourInteraction(targetCanvas, event, point) {
+  const hit = sectionHit(targetCanvas, point);
+  if (!hit) return false;
+  selectFeature(hit.featureId);
+  if (hit.type === "handle") {
+    const feature = state.features.find(item => item.id === hit.featureId);
+    sectionDepthProfile(feature, true);
+    selectedSectionContour = { featureId: hit.featureId, contour: hit.contour, index: hit.index };
+    sectionContourDrag = { ...hit, pointerId: event.pointerId, canvas: targetCanvas };
+    targetCanvas.setPointerCapture(event.pointerId);
+    targetCanvas.style.cursor = "ns-resize";
+  }
+  draw();
+  return true;
+}
+
+function moveSectionContour(targetCanvas, event, point) {
+  if (!sectionContourDrag || sectionContourDrag.canvas !== targetCanvas) return false;
+  const feature = state.features.find(item => item.id === sectionContourDrag.featureId);
+  if (!feature) return false;
+  const profile = sectionDepthProfile(feature, true);
+  const controls = profile[sectionContourDrag.contour];
+  const control = controls[sectionContourDrag.index];
+  const minimumPosition = sectionContourDrag.index ? controls[sectionContourDrag.index - 1][0] + .01 : 0;
+  const maximumPosition = sectionContourDrag.index < controls.length - 1 ? controls[sectionContourDrag.index + 1][0] - .01 : 1;
+  control[0] = Math.max(minimumPosition, Math.min(maximumPosition,
+    (point[0] - sectionContourDrag.range.left) / Math.max(1, sectionContourDrag.range.right - sectionContourDrag.range.left)));
+  const position = control[0];
+  const candidateDepth = Math.max(0, (point[1] - sectionContourDrag.pad.top) / sectionContourDrag.plotHeight * sectionContourDrag.maxDepth);
+  if (sectionContourDrag.contour === "top") {
+    control[1] = Math.min(candidateDepth, interpolateSectionContour(profile.bottom, position) - 1000);
+  } else {
+    control[1] = Math.max(candidateDepth, interpolateSectionContour(profile.top, position) + 1000);
+  }
+  feature.sectionProfileEdited = true;
+  draw();
+  return true;
+}
+
+function finishSectionContourInteraction(targetCanvas) {
+  if (!sectionContourDrag || sectionContourDrag.canvas !== targetCanvas) return false;
+  const feature = state.features.find(item => item.id === sectionContourDrag.featureId);
+  sectionContourDrag = null;
+  targetCanvas.style.cursor = "default";
+  persist(); renderInspector(); draw();
+  showToast(`${feature?.name || "Feature"} section contour updated`);
+  return true;
+}
+
+function addSectionContourControl(targetCanvas, point) {
+  const hit = sectionHit(targetCanvas, point);
+  if (!hit || hit.type !== "region") return false;
+  const feature = state.features.find(item => item.id === hit.featureId);
+  if (!feature || ["subducting plate", "fault"].includes(feature.model)) return false;
+  const profile = sectionDepthProfile(feature, true);
+  const position = Math.max(.01, Math.min(.99, (point[0] - hit.range.left) / Math.max(1, hit.range.right - hit.range.left)));
+  const topY = hit.pad.top + interpolateSectionContour(profile.top, position) / hit.maxDepth * hit.plotHeight;
+  const bottomY = hit.pad.top + interpolateSectionContour(profile.bottom, position) / hit.maxDepth * hit.plotHeight;
+  const contour = Math.abs(point[1] - topY) <= Math.abs(point[1] - bottomY) ? "top" : "bottom";
+  const depth = interpolateSectionContour(profile[contour], position);
+  profile[contour].push([position, depth]);
+  profile[contour].sort((a, b) => a[0] - b[0]);
+  const index = profile[contour].findIndex(control => control[0] === position);
+  selectedSectionContour = { featureId: feature.id, contour, index };
+  feature.sectionProfileEdited = true;
+  persist(); draw();
+  showToast(`Added ${contour} contour depth control · drag it vertically`);
+  return true;
+}
+
+function removeSelectedSectionContour() {
+  if (!selectedSectionContour) return false;
+  const feature = state.features.find(item => item.id === selectedSectionContour.featureId);
+  const controls = feature && sectionDepthProfile(feature, true)[selectedSectionContour.contour];
+  if (!controls || controls.length <= 2 || selectedSectionContour.index === 0 || selectedSectionContour.index === controls.length - 1) {
+    showToast("End contour controls are retained to preserve the feature boundary");
+    return true;
+  }
+  controls.splice(selectedSectionContour.index, 1);
+  selectedSectionContour = null;
+  feature.sectionProfileEdited = true;
+  persist(); draw();
+  showToast("Section contour control removed");
+  return true;
+}
+
 function drawSectionProfile(width, height) {
   const palette = canvasPalette();
   context.fillStyle = palette.deep; context.fillRect(0, 0, width, height);
@@ -2830,7 +3899,12 @@ function drawSectionProfile(width, height) {
   const plotWidth = width - pad.left - pad.right;
   const plotHeight = height - pad.top - pad.bottom;
   const visibleFeatures = state.features.filter(featureVisible);
-  const maxDepth = Math.max(state.settings.zMax - state.settings.zMin, ...visibleFeatures.map(feature => feature.maxDepth || 0), 1);
+  const profileDepths = visibleFeatures.flatMap(feature => feature.sectionDepthProfile
+    ? [...(feature.sectionDepthProfile.top || []), ...(feature.sectionDepthProfile.bottom || [])].map(point => Number(point[1]) || 0)
+    : []);
+  const maxDepth = Math.max(state.settings.zMax - state.settings.zMin, ...visibleFeatures.map(feature => feature.maxDepth || 0), ...profileDepths, 1);
+  const interactionGeometry = { handles: [], regions: [] };
+  sectionInteractionGeometry.set(canvas, interactionGeometry);
   if (sceneLayerVisible("grid")) {
     context.strokeStyle = "#31434b"; context.strokeRect(pad.left, pad.top, plotWidth, plotHeight);
     context.font = "9px ui-monospace"; context.fillStyle = "#71858d";
@@ -2843,13 +3917,14 @@ function drawSectionProfile(width, height) {
   const section = activeSectionPath();
   const sectionMetrics = sectionPathMetrics(section);
   const sectionLength = sectionMetrics.total;
+  drawComputedThermalSection(section, sectionMetrics, pad, plotWidth, plotHeight, maxDepth);
   drawSectionTopographyProfile(section, sectionMetrics, pad, plotWidth);
   for (const feature of visibleFeatures) {
     if ((feature.model === "subducting plate" || feature.model === "fault") && !sceneLayerVisible("slabs")) continue;
     const meta = FEATURE_TYPES[feature.model];
     const center = feature.points.reduce((sum, point) => [sum[0] + point[0] / feature.points.length, sum[1] + point[1] / feature.points.length], [0, 0]);
     const t = distanceToSection(center, section);
-    const x = pad.left + t * plotWidth;
+    let x = pad.left + t * plotWidth;
     const top = pad.top + (feature.minDepth / maxDepth) * plotHeight;
     const bottom = pad.top + (Math.min(feature.maxDepth, maxDepth) / maxDepth) * plotHeight;
     context.fillStyle = state.appearance.renderMode === "temperature" ? temperatureColor(featureTemperature(feature), .42) : `${meta.color}45`;
@@ -2906,22 +3981,8 @@ function drawSectionProfile(width, height) {
         currentX = nextX; currentY = nextY;
       });
     } else {
-      const halfWidth = meta.geometry === "point" ? 10 : 30;
-      if (!renderOptions.featureContoursOnly && feature.layers?.length) {
-        feature.layers.forEach((layer, layerIndex) => {
-          if (!featureSublayerVisible(feature, layerIndex)) return;
-          const layerTop = pad.top + (Number(layer.minDepth) / maxDepth) * plotHeight;
-          const layerBottom = pad.top + (Math.min(Number(layer.maxDepth), maxDepth) / maxDepth) * plotHeight;
-          context.fillStyle = state.appearance.renderMode === "temperature"
-            ? temperatureColor(layer.temperature, .72)
-            : `hsla(${172 + layerIndex * 31}, 48%, 52%, .32)`;
-          context.fillRect(x - halfWidth, layerTop, halfWidth * 2, Math.max(2, layerBottom - layerTop));
-        });
-      } else if (!renderOptions.featureContoursOnly) {
-        context.fillRect(x - halfWidth, top, halfWidth * 2, Math.max(5, bottom - top));
-      }
-      context.strokeStyle = meta.color;
-      context.strokeRect(x - halfWidth, top, halfWidth * 2, Math.max(5, bottom - top));
+      const range = drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plotHeight, maxDepth, interactionGeometry);
+      x = (range.left + range.right) / 2;
     }
     if (sceneLayerVisible("labels")) {
       context.fillStyle = palette.text; context.font = "600 9px Inter, sans-serif";
@@ -2930,7 +3991,7 @@ function drawSectionProfile(width, height) {
     }
   }
   context.fillStyle = "#8ea1a8"; context.font = "10px ui-monospace";
-  context.fillText(`SECTION · ${section.length} vertices · ${(sectionLength / 1000).toFixed(0)} km`, pad.left, height - 16);
+  context.fillText(`SECTION · ${section.length} vertices · ${(sectionLength / 1000).toFixed(0)} km · select a feature, drag contour nodes · double-click contour to add`, pad.left, height - 16);
   drawGravitySectionProfile(width, pad, plotWidth);
   if (hoverPoint && hoverPoint[0] >= pad.left && hoverPoint[0] <= width - pad.right && hoverPoint[1] >= pad.top && hoverPoint[1] <= height - pad.bottom) {
     const distance = ((hoverPoint[0] - pad.left) / plotWidth) * sectionLength;
@@ -2981,6 +4042,8 @@ function drawOne() {
   drawTomographyLegend(width, height);
   drawLithosphereLegend(width);
   drawGravityLegend(width);
+  drawDerivedFieldLegend(width);
+  drawMissingIsostasyNotice(width);
 }
 
 function renderViewport(name, targetCanvas, targetContext) {
@@ -3285,6 +4348,7 @@ function revealSelectedFeatureProperties() {
 }
 
 function selectFeature(id, additive = false, preserveGroup = false) {
+  if (selectedSectionContour?.featureId !== id) selectedSectionContour = null;
   if (!id) {
     selectedId = null;
     selectedIds.clear();
@@ -3498,6 +4562,27 @@ function renderLayersPanel() {
   document.querySelectorAll("[data-scene-layer]").forEach(input => {
     input.checked = sceneLayerVisible(input.dataset.sceneLayer);
   });
+  const derivedList = document.querySelector("#derived-layer-list");
+  const derivedFields = ensureDerivedFields();
+  derivedList.innerHTML = derivedFields.length ? derivedFields.map(field => `
+    <div class="derived-layer-row ${field.visible === false ? "is-hidden" : ""}">
+      <label>
+        <input type="checkbox" data-toggle-derived-field="${field.id}" ${field.visible === false ? "" : "checked"}>
+        <span><strong>${escapeHtml(field.name)}</strong><small>${escapeHtml(fieldOperationLabel(field.operation))} · ${Number(field.min).toPrecision(3)} to ${Number(field.max).toPrecision(3)} ${escapeHtml(field.unit || "")}</small></span>
+      </label>
+      <button class="ghost" data-remove-derived-field="${field.id}" title="Delete calculated result">×</button>
+    </div>`).join("") : `<div class="navigator-empty">No calculated fields.</div>`;
+  derivedList.querySelectorAll("[data-toggle-derived-field]").forEach(input => input.addEventListener("change", () => {
+    const field = derivedFields.find(item => item.id === input.dataset.toggleDerivedField);
+    if (!field) return;
+    field.visible = input.checked;
+    persist(); renderLayersPanel(); draw();
+  }));
+  derivedList.querySelectorAll("[data-remove-derived-field]").forEach(button => button.addEventListener("click", () => {
+    state.derivedFields = derivedFields.filter(item => item.id !== button.dataset.removeDerivedField);
+    persist(); renderLayersPanel(); syncFieldCalculator(); draw();
+    showToast("Calculated layer removed");
+  }));
   const visibleCount = state.features.filter(feature => featureVisible(feature)).length;
   document.querySelector("#visible-layer-count").textContent = `${visibleCount} of ${state.features.length} visible`;
   const list = document.querySelector("#feature-layer-list");
@@ -3525,6 +4610,7 @@ function renderLayersPanel() {
         <option value="">Ungrouped</option>
         ${state.layerGroups.map(group => `<option value="${group.id}" ${feature.layerGroup === group.id ? "selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}
       </select></label>
+      <button data-edit-feature-layer="${feature.id}" class="feature-layer-edit ghost" title="Select this feature and open its individual properties">Properties · individual overrides</button>
       ${sublayers ? `<div class="feature-sublayers">${sublayers}</div>` : ""}
     </div>`;
   };
@@ -3539,6 +4625,7 @@ function renderLayersPanel() {
         <button data-add-selection-group="${group.id}" class="ghost" title="Move selected features into this group">＋</button>
         <button data-remove-layer-group="${group.id}" class="ghost" title="Remove group without deleting features">×</button>
       </div>
+      ${features.length > 1 ? `<button data-apply-group-parameters="${group.id}" class="group-parameter-apply ghost" title="One-time copy from the selected feature. Every feature remains independently editable afterward.">Copy selected parameters to group · once</button>` : ""}
       <div class="feature-layer-group-items">${features.length ? features.map(featureItem).join("") : `<div class="group-empty">Empty group · select features and press ＋</div>`}</div>
     </section>`;
   }).join("");
@@ -3555,6 +4642,9 @@ function renderLayersPanel() {
     if (!feature) return;
     feature.layerGroup = select.value || null;
     renderLayersPanel(); persist(); draw();
+  }));
+  list.querySelectorAll("[data-edit-feature-layer]").forEach(button => button.addEventListener("click", () => {
+    selectFeature(button.dataset.editFeatureLayer);
   }));
   list.querySelectorAll("[data-toggle-layer-group]").forEach(button => button.addEventListener("click", () => {
     const group = state.layerGroups.find(item => item.id === button.dataset.toggleLayerGroup);
@@ -3576,6 +4666,37 @@ function renderLayersPanel() {
     });
     renderLayersPanel(); persist(); draw();
     showToast(`${ids.size} feature${ids.size === 1 ? "" : "s"} moved to group`);
+  }));
+  list.querySelectorAll("[data-apply-group-parameters]").forEach(button => button.addEventListener("click", () => {
+    const groupId = button.dataset.applyGroupParameters;
+    const template = state.features.find(feature => feature.id === selectedId && feature.layerGroup === groupId);
+    if (!template) return showToast("Select the template feature inside this group first");
+    const parameterKeys = [
+      "minDepth", "maxDepth", "depthReferences",
+      "temperatureModel", "temperature", "spreadingVelocity", "subductingVelocity",
+      "composition", "densityEnabled", "referenceDensity", "densityOperation",
+      "layerMode", "layers",
+      "segmentLength", "thickness", "angle",
+      "crossSectionDepth", "semiMajorAxis", "eccentricity",
+      "generatedTopographyModels", "lithoTopographyReference"
+    ];
+    const targets = state.features.filter(feature =>
+      feature.layerGroup === groupId && feature.model === template.model && feature.id !== template.id);
+    if (!targets.length) return showToast(`No other ${FEATURE_TYPES[template.model].label.toLowerCase()} features in this group`);
+    targets.forEach(feature => {
+      parameterKeys.forEach(key => {
+        if (Object.hasOwn(template, key)) feature[key] = structuredClone(template[key]);
+        else delete feature[key];
+      });
+      feature.thermalEdited = true;
+      feature.compositionEdited = true;
+      feature.densityEdited = true;
+      feature.layersEdited = true;
+      feature.segmentEdited = true;
+      feature.plumeGeometryEdited = true;
+    });
+    updateAll();
+    showToast(`${template.name} parameters applied to ${targets.length} group feature${targets.length === 1 ? "" : "s"}`);
   }));
   list.querySelectorAll("[data-remove-layer-group]").forEach(button => button.addEventListener("click", () => {
     const id = button.dataset.removeLayerGroup;
@@ -3765,6 +4886,18 @@ function renderInspector() {
       ${inputField("Radius (km)", "semiMajorAxis:km", feature.semiMajorAxis / 1000)}
       ${inputField("Eccentricity", "eccentricity", feature.eccentricity, { step: "0.05" })}
     </div></div>` : "";
+  const sectionProfileFields = !["subducting plate", "fault"].includes(feature.model) ? `
+    <div class="field-group section-profile-editor">
+      <h3>Non-uniform section depth</h3>
+      <p class="layer-note">${feature.sectionDepthProfile
+        ? `${feature.sectionDepthProfile.top.length} upper and ${feature.sectionDepthProfile.bottom.length} lower contour controls.`
+        : "Open Depth section, select this feature, then drag the gold upper or teal lower contour controls."}</p>
+      <div class="layer-actions">
+        <button id="open-section-profile" class="ghost">Open depth section</button>
+        ${feature.sectionDepthProfile ? `<button id="reset-section-profile" class="ghost">Reset uniform depth</button>` : ""}
+      </div>
+      <p class="layer-note">Double-click a contour to add a control. Select an interior control and press Delete to remove it. Internal layers follow the edited thickness proportionally.</p>
+    </div>` : "";
   const densityFields = `
     <div class="field-group density-editor"><h3>Density model <span class="framework-badge">GWB framework</span></h3>
       <label class="checkbox-row"><input data-feature-key="densityEnabled" type="checkbox" ${feature.densityEnabled ? "checked" : ""}> Enable uniform composition density</label>
@@ -3797,7 +4930,7 @@ function renderInspector() {
         ${inputField("Max depth (km)", "maxDepth:km", feature.maxDepth / 1000)}
       </div>
     </div>
-    ${subductionFields}${plumeFields}
+    ${subductionFields}${plumeFields}${sectionProfileFields}
     <div class="field-group"><h3>Thermal model</h3>
       <div class="form-grid">
         <label>Model<select data-feature-key="temperatureModel">
@@ -3820,6 +4953,18 @@ function renderInspector() {
     </details>`;
   panel.querySelectorAll("[data-feature-key]").forEach(input => input.addEventListener("input", onFeatureInput));
   bindLayerEditor(panel, feature);
+  panel.querySelector("#open-section-profile")?.addEventListener("click", () => {
+    setViewportMode(activeViewport, "section");
+    draw();
+    showToast("Depth section ready · drag contour controls or double-click to add one");
+  });
+  panel.querySelector("#reset-section-profile")?.addEventListener("click", () => {
+    delete feature.sectionDepthProfile;
+    delete feature.sectionProfileEdited;
+    selectedSectionContour = null;
+    updateAll();
+    showToast("Uniform feature depth restored");
+  });
   panel.querySelector(".duplicate-feature").addEventListener("click", duplicateSelectedFeature);
   panel.querySelector(".delete-feature").addEventListener("click", deleteSelectedFeature);
   panel.querySelector("#apply-advanced-json").addEventListener("click", () => {
@@ -3947,8 +5092,10 @@ function loadWorld(world, grid = "") {
   state.colorMaps = colorMaps;
   state.colorMapVersion = COLOR_MAP_VERSION;
   state.layerGroups = [];
+  state.derivedFields = [];
   state.ui = ui;
   state.sectionPath = state.settings.section?.map(point => [...point]) || [];
+  computedModel = null;
   referenceImage = null;
   if (grid) state.settings = applyGridConfig(state.settings, grid);
   else fitDomainToFeatures();
@@ -3956,6 +5103,7 @@ function loadWorld(world, grid = "") {
   selectedIds = selectedId ? new Set([selectedId]) : new Set();
   syncSettingsForm();
   syncGravityUI();
+  syncComputationUI();
   updateAll();
 }
 
@@ -3984,6 +5132,194 @@ function renderExamples() {
   }));
 }
 
+function tutorialProgress() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TUTORIAL_PROGRESS_KEY) || "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveTutorialProgress(progress) {
+  localStorage.setItem(TUTORIAL_PROGRESS_KEY, JSON.stringify(progress));
+}
+
+function activeTutorial() {
+  return TUTORIALS.find(tutorial => tutorial.id === activeTutorialId) || TUTORIALS[0];
+}
+
+function renderTutorialDetail() {
+  const tutorial = activeTutorial();
+  const progress = tutorialProgress();
+  document.querySelector("#tutorial-eyebrow").textContent = tutorial.eyebrow;
+  document.querySelector("#tutorial-title").textContent = tutorial.title;
+  document.querySelector("#tutorial-duration").textContent = tutorial.duration;
+  document.querySelector("#tutorial-summary").textContent = tutorial.summary;
+  const image = document.querySelector("#tutorial-image");
+  image.src = tutorial.image;
+  image.alt = `${tutorial.title} tutorial preview`;
+  document.querySelector("#tutorial-image-caption").textContent = tutorial.caption;
+  document.querySelector("#tutorial-step-list").innerHTML = tutorial.steps.map(step => `
+    <li><div><strong>${escapeHtml(step.title)}</strong><span>${escapeHtml(step.copy)}</span></div></li>`).join("");
+  const complete = Boolean(progress[tutorial.id]?.complete);
+  const completeButton = document.querySelector("#mark-tutorial-complete");
+  completeButton.textContent = complete ? "Completed ✓" : "Mark as complete";
+  completeButton.classList.toggle("active", complete);
+}
+
+function renderTutorialTopics(query = document.querySelector("#tutorial-search")?.value || "") {
+  const normalized = query.trim().toLowerCase();
+  const progress = tutorialProgress();
+  const filtered = TUTORIALS.filter(tutorial =>
+    !normalized || `${tutorial.title} ${tutorial.shortTitle} ${tutorial.eyebrow} ${tutorial.summary}`
+      .toLowerCase().includes(normalized));
+  const list = document.querySelector("#tutorial-topic-list");
+  list.innerHTML = filtered.map(tutorial => `
+    <button type="button" class="tutorial-topic ${tutorial.id === activeTutorialId ? "active" : ""}" data-tutorial-id="${tutorial.id}">
+      <span class="tutorial-topic-icon" aria-hidden="true">${tutorial.icon}</span>
+      <span class="tutorial-topic-copy"><strong>${escapeHtml(tutorial.shortTitle)}</strong><small>${tutorial.duration} · ${tutorial.steps.length} steps</small></span>
+      <span class="tutorial-topic-status" aria-label="${progress[tutorial.id]?.complete ? "Completed" : "Not completed"}">${progress[tutorial.id]?.complete ? "✓" : ""}</span>
+    </button>`).join("");
+  if (!filtered.length) {
+    list.innerHTML = `<p class="navigator-empty">No tutorial matches “${escapeHtml(query)}”.</p>`;
+    return;
+  }
+  list.querySelectorAll("[data-tutorial-id]").forEach(button => button.addEventListener("click", () => {
+    activeTutorialId = button.dataset.tutorialId;
+    renderTutorialTopics();
+    renderTutorialDetail();
+  }));
+}
+
+function openTutorialCenter(tutorialId = activeTutorialId) {
+  if (TUTORIALS.some(tutorial => tutorial.id === tutorialId)) activeTutorialId = tutorialId;
+  renderTutorialTopics("");
+  renderTutorialDetail();
+  document.querySelector("#tutorial-search").value = "";
+  const dialog = document.querySelector("#tutorial-dialog");
+  if (!dialog.open) dialog.showModal();
+}
+
+function selectTutorialPaletteTab(name) {
+  state.ui.paletteCollapsed = false;
+  state.ui.compactPanel = "palette";
+  applyWorkspaceUI();
+  const button = document.querySelector(`[data-palette-tab="${name}"]`);
+  if (button && !button.classList.contains("active")) button.click();
+}
+
+function revealTutorialEditor(id, toggleId) {
+  closeFloatingEditors();
+  const editor = document.querySelector(id);
+  if (editor?.classList.contains("hidden")) document.querySelector(toggleId)?.click();
+}
+
+function prepareGuidedTutorialStep(step) {
+  if (step.prepare === "features") selectTutorialPaletteTab("features");
+  if (step.prepare === "topography" || step.prepare === "gplates") selectTutorialPaletteTab("topography");
+  if (step.prepare === "gplates") {
+    const source = document.querySelector(".paleogeography-source");
+    const disclosure = source?.closest("details");
+    if (disclosure) disclosure.open = true;
+  }
+  if (step.prepare === "tomography") revealTutorialEditor("#tomography-editor", "#toggle-tomography");
+  if (step.prepare === "gravity") revealTutorialEditor("#gravity-editor", "#toggle-gravity");
+  if (step.prepare === "plan") {
+    const planButton = document.querySelector('[data-view="plan"]');
+    if (planButton && !planButton.classList.contains("active")) planButton.click();
+  }
+  if (step.prepare === "inspector") {
+    state.ui.inspectorCollapsed = false;
+    state.ui.compactPanel = "inspector";
+    applyWorkspaceUI();
+  }
+  if (step.prepare === "section") {
+    const sectionButton = document.querySelector('[data-tool="section"]');
+    if (sectionButton && !sectionButton.classList.contains("active")) sectionButton.click();
+  }
+}
+
+function positionGuidedTutorial() {
+  if (!guidedTutorial) return;
+  const step = guidedTutorial.steps[guidedTutorialStep];
+  const target = document.querySelector(step.target) || document.querySelector(".stage");
+  if (!target) return;
+  target.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
+  const rect = target.getBoundingClientRect();
+  const pad = 7;
+  const focus = document.querySelector("#guided-tour-focus");
+  const left = Math.max(5, rect.left - pad);
+  const top = Math.max(5, rect.top - pad);
+  const right = Math.min(window.innerWidth - 5, rect.right + pad);
+  const bottom = Math.min(window.innerHeight - 5, rect.bottom + pad);
+  Object.assign(focus.style, {
+    left: `${left}px`, top: `${top}px`,
+    width: `${Math.max(28, right - left)}px`, height: `${Math.max(28, bottom - top)}px`
+  });
+  const card = document.querySelector("#guided-tour-card");
+  const cardWidth = Math.min(330, window.innerWidth - 24);
+  const measuredHeight = Math.max(190, card.getBoundingClientRect().height || 190);
+  let cardLeft;
+  let cardTop;
+  if (window.innerWidth - right >= cardWidth + 18) {
+    cardLeft = right + 12;
+    cardTop = Math.max(12, Math.min(window.innerHeight - measuredHeight - 12, top));
+  } else if (left >= cardWidth + 18) {
+    cardLeft = left - cardWidth - 12;
+    cardTop = Math.max(12, Math.min(window.innerHeight - measuredHeight - 12, top));
+  } else {
+    cardLeft = Math.max(12, Math.min(window.innerWidth - cardWidth - 12, left));
+    cardTop = bottom + measuredHeight + 18 < window.innerHeight
+      ? bottom + 12
+      : Math.max(12, top - measuredHeight - 12);
+  }
+  Object.assign(card.style, { left: `${cardLeft}px`, top: `${cardTop}px` });
+}
+
+function renderGuidedTutorialStep() {
+  if (!guidedTutorial) return;
+  const step = guidedTutorial.steps[guidedTutorialStep];
+  prepareGuidedTutorialStep(step);
+  document.querySelector("#guided-tour-progress").textContent =
+    `${guidedTutorial.shortTitle} · step ${guidedTutorialStep + 1} of ${guidedTutorial.steps.length}`;
+  document.querySelector("#guided-tour-title").textContent = step.title;
+  document.querySelector("#guided-tour-copy").textContent = step.copy;
+  document.querySelector("#guided-tour-previous").disabled = guidedTutorialStep === 0;
+  document.querySelector("#guided-tour-next").textContent =
+    guidedTutorialStep === guidedTutorial.steps.length - 1 ? "Finish" : "Next";
+  requestAnimationFrame(() => requestAnimationFrame(positionGuidedTutorial));
+}
+
+function startGuidedTutorial(tutorial = activeTutorial()) {
+  document.querySelector("#tutorial-dialog").close();
+  guidedTutorial = tutorial;
+  guidedTutorialStep = 0;
+  const tour = document.querySelector("#guided-tour");
+  tour.classList.remove("hidden");
+  tour.setAttribute("aria-hidden", "false");
+  document.body.classList.add("tutorial-active");
+  renderGuidedTutorialStep();
+}
+
+function closeGuidedTutorial({ complete = false, reopen = false } = {}) {
+  if (!guidedTutorial) return;
+  const completedTutorial = guidedTutorial;
+  if (complete) {
+    const progress = tutorialProgress();
+    progress[completedTutorial.id] = { complete: true, completedAt: new Date().toISOString() };
+    saveTutorialProgress(progress);
+  }
+  if (tool === "section") cancelSectionPath();
+  guidedTutorial = null;
+  guidedTutorialStep = 0;
+  const tour = document.querySelector("#guided-tour");
+  tour.classList.add("hidden");
+  tour.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("tutorial-active");
+  if (reopen) openTutorialCenter(completedTutorial.id);
+}
+
 async function loadExampleCatalog() {
   try {
     const response = await fetchWithProgress("./examples/catalog.json", {}, "Loading GWB example library");
@@ -3993,6 +5329,24 @@ async function loadExampleCatalog() {
     renderExamples();
   } catch {
     document.querySelector("#example-summary").textContent = "The example library could not be loaded.";
+  }
+}
+
+async function loadGwbVersion() {
+  const badge = document.querySelector("#gwb-version-badge");
+  const engine = document.querySelector("#computation-engine-version");
+  try {
+    const response = await fetch("/api/version", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const metadata = await response.json();
+    const version = String(metadata.version || state.settings.version);
+    badge.textContent = `GWB ${version}`;
+    badge.title = `${metadata.name || "Geodynamic World Builder"} ${version} · .wb schema ${metadata.schemaVersion || state.settings.version} · WebAssembly backend available`;
+    engine.textContent = `GWB ${version} C++ · WEBASSEMBLY WORKER`;
+  } catch {
+    badge.textContent = `GWB ${state.settings.version}`;
+    badge.title = `World Builder .wb schema ${state.settings.version} · exact source version unavailable from this server`;
+    engine.textContent = `GWB ${state.settings.version} C++ · WEBASSEMBLY WORKER`;
   }
 }
 
@@ -4068,6 +5422,7 @@ function renderOutput() {
 function updateAll(rerenderInspector = true) {
   commitHistory();
   persist();
+  syncSectionActions();
   if (rerenderInspector) renderInspector();
   renderNavigator();
   renderLayersPanel();
@@ -5106,14 +6461,45 @@ function updateTopographyUI() {
   const hasValues = topography?.values?.length === topography.width * topography.height;
   const hasImage = Boolean(topography?.imageSrc);
   const source = topography?.source || (hasValues || hasImage ? "Edited surface" : "empty");
+  const computedIsostasy = mode === "isostatic"
+    && hasValues
+    && String(source).startsWith("GWB WebAssembly");
   document.querySelector("#topography-status-mini").textContent = mode === "none" ? "disabled" : mode === "isostatic" ? "isostatic" : source;
   document.querySelector("#topography-mode").value = mode;
   document.querySelector("#topography-mode-note").textContent = mode === "none"
     ? "No feature topography models will be exported."
     : mode === "isostatic"
-      ? "GWB will receive composition densities and reference-column isostasy parameters."
+      ? String(source).startsWith("GWB WebAssembly")
+        ? "Computed GWB isostatic topography is displayed; density and reference-column parameters remain authoritative."
+        : "GWB will receive composition densities and reference-column isostasy parameters."
       : "Terrain fields are converted to per-feature GWB depth surfaces.";
   document.querySelector("#isostasy-controls").classList.toggle("hidden", mode !== "isostatic");
+  const isostasyState = document.querySelector("#isostasy-compute-state");
+  if (isostasyState) {
+    isostasyState.classList.toggle("ready", computedIsostasy);
+    isostasyState.classList.toggle("pending", !computedIsostasy);
+    const strong = isostasyState.querySelector("strong");
+    const detail = isostasyState.querySelector("span");
+    if (computedIsostasy) {
+      let minimum = Infinity; let maximum = -Infinity;
+      topography.values.forEach(value => {
+        if (!Number.isFinite(value)) return;
+        minimum = Math.min(minimum, value);
+        maximum = Math.max(maximum, value);
+      });
+      strong.textContent = "Computed surface is visible";
+      detail.textContent = `${Math.round(minimum)} to ${Math.round(maximum)} m · ${topography.width} × ${topography.height} samples · use Layers to hide/show`;
+    } else {
+      strong.textContent = "Not computed yet";
+      detail.textContent = state.features.some(feature => feature.densityEnabled)
+        ? "Density is configured. Run the WebAssembly calculation to create the visible surface."
+        : "Enable density on at least one feature, then calculate the surface.";
+    }
+  }
+  const inlineCompute = document.querySelector("#compute-isostatic-topography-inline");
+  if (inlineCompute) inlineCompute.textContent = computedIsostasy
+    ? "Recompute and update topography"
+    : "Compute and display topography";
   document.querySelector("#apply-topography-features").disabled = mode !== "terrain";
   const densityValues = {
     "background-density": state.settings.backgroundDensity,
@@ -5138,6 +6524,10 @@ function updateTopographyUI() {
 function ensurePaleogeography() {
   if (!state.paleogeography) state.paleogeography = { ...DEFAULT_PALEOGEOGRAPHY };
   state.paleogeography.layers ||= {};
+  state.paleogeography.layerVisibility = {
+    ...DEFAULT_PALEOGEOGRAPHY.layerVisibility,
+    ...(state.paleogeography.layerVisibility || {})
+  };
   return state.paleogeography;
 }
 
@@ -5172,6 +6562,9 @@ function updatePaleoUI() {
   document.querySelector("#paleo-age-slider").value = paleo.age;
   document.querySelector("#paleo-anchor").value = String(paleo.anchorPlateId);
   document.querySelector("#show-paleogeography").checked = paleo.visible;
+  document.querySelector("#paleo-coastlines").checked = paleo.layerVisibility.coastlines !== false;
+  document.querySelector("#paleo-subduction").checked = paleo.layerVisibility.subduction !== false;
+  document.querySelector("#paleo-boundaries").checked = paleo.layerVisibility.boundaries !== false;
   const count = Object.values(paleo.layers).reduce((sum, collection) => sum + (collection?.features?.length || 0), 0);
   document.querySelector("#paleo-connection").textContent = count ? `${count} vectors` : "not loaded";
   document.querySelector("#paleo-connection").classList.toggle("loaded", count > 0);
@@ -5308,13 +6701,84 @@ function simplifiedPoints(points, limit = 70, closed = false) {
     .map(point => [Number(point[0]), Number(point[1])]);
 }
 
+function ensurePaleoLayerGroup(paleo, layer) {
+  const labels = {
+    coastlines: "Continents",
+    subduction: "Subduction zones",
+    boundaries: "Plate boundaries"
+  };
+  const identity = `${paleo.model}-${paleo.age}-${layer}`.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const id = `gplates-${identity}`;
+  state.layerGroups = Array.isArray(state.layerGroups) ? state.layerGroups : [];
+  let group = state.layerGroups.find(item => item.id === id);
+  if (!group) {
+    group = {
+      id,
+      name: `GPlates · ${labels[layer] || layer} · ${paleo.model} · ${paleo.age} Ma`,
+      visible: true,
+      source: "gplates",
+      paleoLayer: layer
+    };
+    state.layerGroups.push(group);
+  }
+  return group;
+}
+
 function convertPaleoFeatures() {
   const paleo = ensurePaleogeography();
   const additions = [];
-  const append = (model, points, properties, closed) => {
+  let upgraded = 0;
+  let grouped = 0;
+  let correctedDips = 0;
+  const skipped = { outside: 0, invalid: 0, duplicate: 0, capped: 0 };
+  const geometrySignature = (model, points) => `${model}|${points
+    .map(point => `${Number(point[0]).toFixed(4)},${Number(point[1]).toFixed(4)}`)
+    .join(";")}`;
+  const existing = new Map(state.features.map(feature => [
+    geometrySignature(feature.model, simplifiedPoints(feature.points, 70, FEATURE_TYPES[feature.model]?.geometry === "area")),
+    feature
+  ]));
+  const append = (layer, model, points, properties, closed) => {
     const simplified = simplifiedPoints(points, 70, closed);
     const minimum = FEATURE_TYPES[model].geometry === "area" ? 3 : 2;
-    if (simplified.length < minimum || !partIntersectsDomain(simplified)) return;
+    if (simplified.length < minimum) {
+      skipped.invalid++;
+      return false;
+    }
+    if (!partIntersectsDomain(simplified)) {
+      skipped.outside++;
+      return false;
+    }
+    const signature = geometrySignature(model, simplified);
+    const existingFeature = existing.get(signature);
+    if (existingFeature) {
+      if (existingFeature.source === paleo.source) {
+        const group = ensurePaleoLayerGroup(paleo, layer);
+        if (existingFeature.layerGroup !== group.id) {
+          existingFeature.layerGroup = group.id;
+          grouped++;
+        }
+        if (model === "subducting plate" && existingFeature.dipPointDerivedFromGplates !== false) {
+          const corrected = deriveSubductionDipPoint(simplified, properties);
+          if (corrected && (!existingFeature.dipPoint
+            || Math.hypot(corrected[0] - existingFeature.dipPoint[0], corrected[1] - existingFeature.dipPoint[1]) > 1e-8)) {
+            existingFeature.dipPoint = corrected;
+            existingFeature.dipPointDerivedFromGplates = true;
+            correctedDips++;
+          }
+        }
+      }
+      if (model === "continental plate" && (!existingFeature.densityEnabled || !existingFeature.layersEdited)) {
+        existingFeature.layers = existingFeature.layers?.length
+          ? existingFeature.layers : geologicalLayerPreset(existingFeature);
+        existingFeature.layersEdited = true;
+        existingFeature.densityEnabled = true;
+        upgraded++;
+      } else {
+        skipped.duplicate++;
+      }
+      return false;
+    }
     const center = simplified.reduce((sum, point) => [
       sum[0] + point[0] / simplified.length, sum[1] + point[1] / simplified.length
     ], [0, 0]);
@@ -5324,38 +6788,69 @@ function convertPaleoFeatures() {
     feature.geometryEdited = true;
     feature.source = paleo.source;
     feature.name = properties.name || `${FEATURE_TYPES[model].label} · ${paleo.age} Ma`;
-    if (model === "continental plate") feature.layers = geologicalLayerPreset(feature);
-    if (feature.dipPoint) {
-      const polarity = String(properties.polarity || "").toLowerCase();
-      feature.dipPoint = [center[0], Math.max(-90, Math.min(90, center[1] + (polarity === "right" ? -5 : 5)))];
+    feature.layerGroup = ensurePaleoLayerGroup(paleo, layer).id;
+    if (model === "continental plate") {
+      feature.layers = geologicalLayerPreset(feature);
+      feature.layersEdited = true;
+      feature.densityEnabled = true;
+    }
+    if (model === "subducting plate") {
+      feature.dipPoint = deriveSubductionDipPoint(simplified, properties) || feature.dipPoint;
+      feature.dipPointDerivedFromGplates = true;
     }
     additions.push(feature);
+    existing.set(signature, feature);
+    return true;
   };
-  const caps = { coastlines: 18, subduction: 30, boundaries: 30 };
+  // Convert every reconstructed continent in the domain. Structural line
+  // layers retain a generous guardrail because global services can return
+  // thousands of short fragments that are expensive to edit individually.
+  const caps = { coastlines: Infinity, subduction: 120, boundaries: 120 };
   [
     ["coastlines", "continental plate"],
     ["subduction", "subducting plate"],
     ["boundaries", "fault"]
   ].forEach(([layer, model]) => {
+    if (paleo.layerVisibility?.[layer] === false) return;
     let count = 0;
     forEachGeoPart(paleo.layers[layer], (part, properties) => {
-      if (count >= caps[layer] || !partIntersectsDomain(part.points)) return;
-      append(model, part.points, properties, part.closed);
-      count++;
+      if (count >= caps[layer]) {
+        skipped.capped++;
+        return;
+      }
+      if (append(layer, model, part.points, properties, part.closed)) count++;
     });
   });
-  if (!additions.length) {
-    showToast("No loaded vectors intersect the current model bounds");
+  if (!additions.length && !upgraded && !grouped && !correctedDips) {
+    showToast(skipped.duplicate
+      ? "All intersecting reconstruction vectors are already converted"
+      : "No loaded vectors intersect the current model bounds");
     return;
   }
   state.features.push(...additions);
   activateTemperaturePreview();
-  selectedId = additions[0].id;
-  selectedIds = new Set([selectedId]);
+  if (additions.length) {
+    selectedId = additions[0].id;
+    selectedIds = new Set([selectedId]);
+  }
   updateAll();
+  const continents = additions.filter(feature => feature.model === "continental plate").length;
+  const structures = additions.length - continents;
+  const detail = [
+    additions.length ? `${continents} continent${continents === 1 ? "" : "s"}` : null,
+    additions.length ? `${structures} structural feature${structures === 1 ? "" : "s"}` : null,
+    grouped ? `${grouped} existing feature${grouped === 1 ? "" : "s"} grouped` : null,
+    correctedDips ? `${correctedDips} slab dip direction${correctedDips === 1 ? "" : "s"} corrected` : null,
+    upgraded ? `${upgraded} existing continent densit${upgraded === 1 ? "y" : "ies"} enabled` : null,
+    skipped.capped ? `${skipped.capped} structural fragments beyond the safety limit skipped` : null
+  ].filter(Boolean).join(" · ");
   document.querySelector("#paleo-status").textContent =
-    `${additions.length} simplified editable GWB features created in the current domain.`;
-  showToast(`${additions.length} reconstruction vectors converted`);
+    `${detail}. All intersecting coastline geometries were considered.`;
+  showToast(additions.length
+    ? `${continents} continents and ${structures} structures converted into layer groups`
+    : correctedDips
+      ? `${correctedDips} existing slab dip direction${correctedDips === 1 ? "" : "s"} corrected`
+      : `${grouped} existing GPlates feature${grouped === 1 ? "" : "s"} grouped`);
 }
 
 async function importRasterTopography(file) {
@@ -5611,6 +7106,10 @@ canvas.addEventListener("pointerdown", event => {
   }
   const point = canvasPoint(event);
   hoverPoint = point;
+  if (viewMode === "section") {
+    if (!beginSectionContourInteraction(canvas, event, point)) draw();
+    return;
+  }
   if (viewMode !== "plan") {
     draw();
     return;
@@ -5657,8 +7156,22 @@ canvas.addEventListener("pointerdown", event => {
   const thicknessHit = tool === "select" && hitThicknessHandle(selectedFeature, point);
   const feature = dipHit || plumeResizeHit || layerBoundaryHit || thicknessHit ? selectedFeature : hitFeature(point);
   if (tool === "section") {
+    const nearestIndex = sectionDraft
+      .map(worldToCanvas)
+      .findIndex(handle => Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= 12);
+    if (nearestIndex >= 0) {
+      event.preventDefault();
+      selectedSectionPointIndex = nearestIndex;
+      sectionPathDrag = { pointerId: event.pointerId, index: nearestIndex };
+      canvas.setPointerCapture(event.pointerId);
+      canvas.style.cursor = "grabbing";
+      syncSectionActions();
+      draw();
+      return;
+    }
     const world = canvasToWorld(...point).map(value => Math.round(value));
     sectionDraft.push(world);
+    selectedSectionPointIndex = sectionDraft.length - 1;
     syncSectionActions();
     draw();
     showToast(sectionDraft.length === 1 ? "Add more points, then press Enter" : `${sectionDraft.length} section points · Enter to finish`);
@@ -5732,6 +7245,11 @@ canvas.addEventListener("dblclick", event => {
     resetGravityLegend("primary");
     return;
   }
+  if (viewMode === "section" && tool === "select") {
+    event.preventDefault();
+    addSectionContourControl(canvas, canvasPoint(event));
+    return;
+  }
   if (cameraPanMode || viewMode !== "plan" || tool !== "select") return;
   event.preventDefault();
   addVertexAt(canvasPoint(event), true);
@@ -5753,6 +7271,15 @@ canvas.addEventListener("pointermove", event => {
   }
   const point = canvasPoint(event);
   hoverPoint = point;
+  if (sectionPathDrag && tool === "section") {
+    const precision = state.settings.coordinateSystem === "spherical" ? 1e5 : 1;
+    sectionDraft[sectionPathDrag.index] = canvasToWorld(...point)
+      .map(value => Math.round(value * precision) / precision);
+    canvas.style.cursor = "grabbing";
+    draw();
+    return;
+  }
+  if (viewMode === "section" && moveSectionContour(canvas, event, point)) return;
   if (marqueeSelection) {
     marqueeSelection.current = [...point];
     draw();
@@ -5798,6 +7325,7 @@ canvas.addEventListener("pointermove", event => {
     feature.geometryEdited = true;
   } else if (drag.mode === "dip") {
     feature.dipPoint = [world[0], world[1]];
+    feature.dipPointDerivedFromGplates = false;
     feature.geometryEdited = true;
   } else if (drag.mode === "plume-resize") {
     const center = drag.original[0];
@@ -5856,6 +7384,14 @@ canvas.addEventListener("pointermove", event => {
 });
 canvas.addEventListener("pointerup", () => {
   if (finishGravityLegendDrag(canvas)) return;
+  if (finishSectionContourInteraction(canvas)) return;
+  if (sectionPathDrag) {
+    sectionPathDrag = null;
+    canvas.style.cursor = "crosshair";
+    syncSectionActions();
+    draw();
+    return;
+  }
   if (cameraDrag) {
     cameraDrag = null;
     canvas.style.cursor = cameraPanMode || viewMode === "three-d" ? "grab" : "default";
@@ -5902,6 +7438,8 @@ canvas.addEventListener("pointerleave", () => {
 });
 canvas.addEventListener("pointercancel", () => {
   if (finishGravityLegendDrag(canvas)) return;
+  if (finishSectionContourInteraction(canvas)) return;
+  sectionPathDrag = null;
   cameraDrag = null;
   marqueeSelection = null;
   canvas.style.cursor = cameraPanMode || viewMode === "three-d" ? "grab" : "default";
@@ -5911,6 +7449,18 @@ canvas.addEventListener("contextmenu", event => {
   event.preventDefault();
 });
 canvas.addEventListener("keydown", event => {
+  if ((event.key === "Delete" || event.key === "Backspace") && tool === "section" && selectedSectionPointIndex != null) {
+    event.preventDefault();
+    event.stopPropagation();
+    removeSelectedSectionPoint();
+    return;
+  }
+  if ((event.key === "Delete" || event.key === "Backspace") && viewMode === "section" && selectedSectionContour) {
+    event.preventDefault();
+    event.stopPropagation();
+    removeSelectedSectionContour();
+    return;
+  }
   if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
     event.preventDefault();
     const amount = event.shiftKey ? 80 : 32;
@@ -5948,6 +7498,10 @@ secondaryCanvas.addEventListener("pointerdown", event => {
   secondaryCanvas.focus();
   const point = rawCanvasPoint(secondaryCanvas, event);
   if (beginGravityLegendDrag("secondary", secondaryCanvas, event, point)) return;
+  if (viewportModes.secondary === "section") {
+    beginSectionContourInteraction(secondaryCanvas, event, canvasPoint(event));
+    return;
+  }
   const orbit = viewportModes.secondary === "three-d" && event.button === 0 && !cameraPanMode && !event.shiftKey;
   if (!(orbit || cameraPanMode || event.shiftKey || event.button === 1 || event.button === 2)) return;
   event.preventDefault();
@@ -5956,6 +7510,11 @@ secondaryCanvas.addEventListener("pointerdown", event => {
   secondaryCanvas.setPointerCapture(event.pointerId);
 });
 secondaryCanvas.addEventListener("pointermove", event => {
+  if (viewportModes.secondary === "section") {
+    hoverPoint = canvasPoint(event);
+    if (!moveSectionContour(secondaryCanvas, event, hoverPoint)) draw();
+    return;
+  }
   const point = rawCanvasPoint(secondaryCanvas, event);
   if (moveGravityLegend(event, point)) return;
   if (!cameraDrag && gravityLegendHit("secondary", point)) {
@@ -5970,6 +7529,7 @@ secondaryCanvas.addEventListener("pointermove", event => {
 });
 secondaryCanvas.addEventListener("pointerup", () => {
   if (finishGravityLegendDrag(secondaryCanvas)) return;
+  if (finishSectionContourInteraction(secondaryCanvas)) return;
   if (cameraDrag?.viewport !== "secondary") return;
   cameraDrag = null;
   secondaryCanvas.style.cursor = cameraPanMode || viewportModes.secondary === "three-d" ? "grab" : "default";
@@ -5977,14 +7537,26 @@ secondaryCanvas.addEventListener("pointerup", () => {
 });
 secondaryCanvas.addEventListener("pointercancel", () => {
   if (finishGravityLegendDrag(secondaryCanvas)) return;
+  if (finishSectionContourInteraction(secondaryCanvas)) return;
   if (cameraDrag?.viewport === "secondary") cameraDrag = null;
   secondaryCanvas.style.cursor = cameraPanMode || viewportModes.secondary === "three-d" ? "grab" : "default";
 });
 secondaryCanvas.addEventListener("dblclick", event => {
+  if (viewportModes.secondary === "section") {
+    event.preventDefault();
+    addSectionContourControl(secondaryCanvas, canvasPoint(event));
+    return;
+  }
   const point = rawCanvasPoint(secondaryCanvas, event);
   if (!gravityLegendHit("secondary", point)) return;
   event.preventDefault();
   resetGravityLegend("secondary");
+});
+secondaryCanvas.addEventListener("keydown", event => {
+  if ((event.key === "Delete" || event.key === "Backspace") && viewportModes.secondary === "section" && selectedSectionContour) {
+    event.preventDefault();
+    removeSelectedSectionContour();
+  }
 });
 secondaryCanvas.addEventListener("wheel", event => {
   setActiveViewport("secondary");
@@ -6008,34 +7580,37 @@ document.querySelectorAll("[data-tool]").forEach(button => button.addEventListen
     viewportModes[activeViewport] = "plan";
     document.querySelectorAll("[data-view]").forEach(item => item.classList.toggle("active", item.dataset.view === "plan"));
   }
-  tool = button.dataset.tool;
+  const nextTool = button.dataset.tool;
+  tool = nextTool;
   drawPoints = [];
   freehandDrawing = false;
   connectingFrom = null;
-  sectionDraft = [];
+  sectionPathDrag = null;
+  selectedSectionPointIndex = null;
+  sectionDraft = nextTool === "section" && (state.sectionPath?.length >= 2 || state.settings.section?.length >= 2)
+    ? activeSectionPath().map(point => [...point])
+    : [];
   document.querySelectorAll("[data-tool]").forEach(item => item.classList.toggle("active", item === button));
-  canvas.style.cursor = viewMode === "three-d" ? "grab" : tool === "connect" ? "crosshair" : "default";
+  canvas.style.cursor = viewMode === "three-d" ? "grab" : ["connect", "section"].includes(tool) ? "crosshair" : "default";
   updateDrawingUI();
   syncSectionActions();
   draw();
+  if (nextTool === "section" && sectionDraft.length >= 2) {
+    showToast("Editing section · drag points, click to add bends, or delete the path");
+  }
 }));
 document.querySelector("#undo-section-point").addEventListener("click", () => {
   sectionDraft.pop();
+  selectedSectionPointIndex = sectionDraft.length ? sectionDraft.length - 1 : null;
   syncSectionActions();
   draw();
 });
+document.querySelector("#remove-section-point").addEventListener("click", removeSelectedSectionPoint);
 document.querySelector("#finish-section-path").addEventListener("click", finishSectionPath);
+document.querySelector("#delete-section-path").addEventListener("click", deleteSectionPath);
 document.querySelector("#cancel-section-path").addEventListener("click", cancelSectionPath);
 document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => {
-  viewMode = button.dataset.view;
-  viewportModes[activeViewport] = viewMode;
-  if (activeViewport === "secondary") {
-    state.ui.secondaryView = viewMode;
-    persist();
-  }
-  document.querySelectorAll("[data-view]").forEach(item => item.classList.toggle("active", item === button));
-  canvas.style.cursor = viewMode === "three-d" ? "grab" : viewMode === "plan" && tool === "connect" ? "crosshair" : "default";
-  updateViewportLabels();
+  setViewportMode(activeViewport, button.dataset.view);
   draw();
 }));
 document.querySelectorAll("[data-palette-tab]").forEach(button => button.addEventListener("click", () => {
@@ -6129,6 +7704,16 @@ document.querySelector("#load-paleogeography").addEventListener("click", () => l
 document.querySelector("#load-local-gplates").addEventListener("click", () => loadPaleogeography(true));
 document.querySelector("#build-paleo-relief").addEventListener("click", buildPaleoRelief);
 document.querySelector("#convert-paleo-features").addEventListener("click", convertPaleoFeatures);
+[
+  ["#paleo-coastlines", "coastlines"],
+  ["#paleo-subduction", "subduction"],
+  ["#paleo-boundaries", "boundaries"]
+].forEach(([selector, layer]) => {
+  document.querySelector(selector).addEventListener("change", event => {
+    ensurePaleogeography().layerVisibility[layer] = event.target.checked;
+    persist(); draw();
+  });
+});
 document.querySelector("#show-paleogeography").addEventListener("change", event => {
   ensurePaleogeography().visible = event.target.checked; persist(); draw();
 });
@@ -6168,7 +7753,7 @@ document.querySelector("#topography-mode").addEventListener("change", event => {
   showToast(event.target.value === "none"
     ? "Topography disabled for export"
     : event.target.value === "isostatic"
-      ? "Isostatic density framework enabled"
+      ? "Isostatic settings ready · click Compute and display topography"
       : "Terrain topography enabled");
 });
 document.querySelectorAll("[data-geographic-bound]").forEach(input => {
@@ -6404,6 +7989,44 @@ document.querySelector("#toggle-research").addEventListener("click", () => {
 document.querySelector("#close-research").addEventListener("click", () => {
   document.querySelector("#research-editor").classList.add("hidden");
   document.querySelector("#toggle-research").setAttribute("aria-expanded", "false");
+});
+document.querySelector("#toggle-computation").addEventListener("click", () => {
+  const editor = document.querySelector("#computation-editor");
+  const willOpen = editor.classList.contains("hidden");
+  editor.classList.toggle("hidden", !willOpen);
+  document.querySelector("#toggle-computation").setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) syncComputationUI();
+});
+document.querySelector("#close-computation").addEventListener("click", () => {
+  document.querySelector("#computation-editor").classList.add("hidden");
+  document.querySelector("#toggle-computation").setAttribute("aria-expanded", "false");
+});
+document.querySelector("#toggle-field-calculator").addEventListener("click", () => {
+  const editor = document.querySelector("#field-calculator");
+  const willOpen = editor.classList.contains("hidden");
+  editor.classList.toggle("hidden", !willOpen);
+  document.querySelector("#toggle-field-calculator").setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) syncFieldCalculator();
+});
+document.querySelector("#close-field-calculator").addEventListener("click", () => {
+  document.querySelector("#field-calculator").classList.add("hidden");
+  document.querySelector("#toggle-field-calculator").setAttribute("aria-expanded", "false");
+});
+document.querySelector("#calculator-operation").addEventListener("change", syncFieldCalculator);
+document.querySelector("#calculate-field").addEventListener("click", calculateDerivedField);
+document.querySelector("#compute-thermal-state").addEventListener("click", () => runModelComputation("thermal"));
+document.querySelector("#compute-isostatic-topography").addEventListener("click", () => runModelComputation("isostatic"));
+document.querySelector("#compute-isostatic-topography-inline").addEventListener("click", () => runModelComputation("isostatic"));
+document.querySelector("#cancel-computation").addEventListener("click", () => computationAbortController?.abort());
+document.querySelector("#computation-sampling").addEventListener("change", syncComputationUI);
+document.querySelector("#computation-depth").addEventListener("input", event => {
+  if (computedModel) computedModel.depthKm = Number(event.target.value);
+  draw();
+});
+document.querySelector("#computation-opacity").addEventListener("input", event => {
+  if (computedModel) computedModel.opacity = Number(event.target.value);
+  if (String(state.topography?.source || "").startsWith("GWB WebAssembly")) state.topography.opacity = Number(event.target.value);
+  draw();
 });
 document.querySelector("#run-research").addEventListener("click", runResearchSearch);
 document.querySelector("#research-query").addEventListener("keydown", event => {
@@ -6825,6 +8448,7 @@ document.querySelector("#reverse-feature").addEventListener("click", () => {
   if (feature.dipPoint) {
     const center = feature.points.reduce((sum, point) => [sum[0] + point[0] / feature.points.length, sum[1] + point[1] / feature.points.length], [0, 0]);
     feature.dipPoint = [center[0] * 2 - feature.dipPoint[0], center[1] * 2 - feature.dipPoint[1]];
+    feature.dipPointDerivedFromGplates = false;
   }
   feature.geometryEdited = true;
   updateAll();
@@ -6910,15 +8534,18 @@ document.querySelector("#new-project").addEventListener("click", () => {
     colorMaps: structuredClone(DEFAULT_COLOR_MAPS),
     colorMapVersion: COLOR_MAP_VERSION,
     layerGroups: [],
+    derivedFields: [],
     ui: { ...DEFAULT_UI, ...(state.ui || {}) }
   };
   referenceImage = null;
   topographyImage = null;
+  computedModel = null;
   selectedId = null;
   selectedIds.clear();
   applyWorkspaceUI();
   syncSettingsForm();
   syncGravityUI();
+  syncComputationUI();
   updateTopographyUI();
   updatePaleoUI();
   updateAll();
@@ -6946,6 +8573,42 @@ document.querySelector("#open-examples").addEventListener("click", () => {
   document.querySelector("#example-search").focus();
 });
 document.querySelector("#close-examples").addEventListener("click", () => document.querySelector("#examples-dialog").close());
+document.querySelector("#open-tutorials").addEventListener("click", () => openTutorialCenter());
+document.querySelector("#close-tutorials").addEventListener("click", () => document.querySelector("#tutorial-dialog").close());
+document.querySelector("#tutorial-search").addEventListener("input", event => renderTutorialTopics(event.target.value));
+document.querySelector("#start-guided-tutorial").addEventListener("click", () => startGuidedTutorial());
+document.querySelector("#mark-tutorial-complete").addEventListener("click", () => {
+  const tutorial = activeTutorial();
+  const progress = tutorialProgress();
+  if (progress[tutorial.id]?.complete) delete progress[tutorial.id];
+  else progress[tutorial.id] = { complete: true, completedAt: new Date().toISOString() };
+  saveTutorialProgress(progress);
+  renderTutorialTopics();
+  renderTutorialDetail();
+});
+document.querySelector("#reset-tutorial-progress").addEventListener("click", () => {
+  saveTutorialProgress({});
+  renderTutorialTopics();
+  renderTutorialDetail();
+  showToast("Tutorial progress reset");
+});
+document.querySelector("#close-guided-tour").addEventListener("click", () => closeGuidedTutorial({ reopen: true }));
+document.querySelector("#guided-tour-shade").addEventListener("click", () => closeGuidedTutorial({ reopen: true }));
+document.querySelector("#guided-tour-previous").addEventListener("click", () => {
+  if (!guidedTutorial || guidedTutorialStep <= 0) return;
+  guidedTutorialStep -= 1;
+  renderGuidedTutorialStep();
+});
+document.querySelector("#guided-tour-next").addEventListener("click", () => {
+  if (!guidedTutorial) return;
+  if (guidedTutorialStep >= guidedTutorial.steps.length - 1) {
+    closeGuidedTutorial({ complete: true, reopen: true });
+    showToast(`${activeTutorial().shortTitle} tutorial completed`);
+    return;
+  }
+  guidedTutorialStep += 1;
+  renderGuidedTutorialStep();
+});
 document.querySelector("#example-search").addEventListener("input", event => { exampleQuery = event.target.value; renderExamples(); });
 document.querySelector("#example-category").addEventListener("change", event => { exampleCategory = event.target.value; renderExamples(); });
 document.querySelector("#tomography-catalog-search").addEventListener("input", renderTomographyCatalog);
@@ -7033,6 +8696,7 @@ function closeFloatingEditors() {
     ["lithosphere-editor", "toggle-lithosphere"],
     ["research-editor", "toggle-research"],
     ["gravity-editor", "toggle-gravity"],
+    ["field-calculator", "toggle-field-calculator"],
     ["appearance-editor", "toggle-appearance"]
   ].forEach(([editorId, toggleId]) => {
     document.querySelector(`#${editorId}`).classList.add("hidden");
@@ -7084,6 +8748,13 @@ document.addEventListener("pointerdown", event => {
 });
 
 window.addEventListener("keydown", event => {
+  if (guidedTutorial) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeGuidedTutorial({ reopen: true });
+    }
+    return;
+  }
   const target = event.target;
   if (target.matches?.("input, textarea, select") || target.isContentEditable) return;
   const key = event.key.toLowerCase();
@@ -7151,6 +8822,7 @@ syncMapEditor();
 syncAppearanceEditor();
 syncColorEditor();
 syncGravityUI();
+syncComputationUI();
 syncTomographyUI();
 syncLithosphereUI();
 renderPlanetaryCatalog();
@@ -7161,9 +8833,11 @@ updatePaleoUI();
 renderLayersPanel();
 updateCameraUI();
 updateAll();
+loadGwbVersion();
 loadExampleCatalog();
 new ResizeObserver(resize).observe(wrap);
 window.addEventListener("resize", () => {
   applyWorkspaceUI();
   resize();
+  if (guidedTutorial) positionGuidedTutorial();
 });

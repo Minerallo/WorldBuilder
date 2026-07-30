@@ -7,6 +7,8 @@
 #include "world_builder/grid_sampler.h"
 #include "world_builder/world.h"
 
+#include "adaptive_sampler.h"
+
 #include <emscripten/bind.h>
 
 #include <atomic>
@@ -105,6 +107,70 @@ namespace
         return output;
       }
 
+      emscripten::val sample_adaptive_grid(
+        const std::string &grid_text,
+        const unsigned int resolution_limit,
+        const unsigned int base_resolution,
+        const unsigned int max_depth,
+        const unsigned int max_cells,
+        const double temperature_tolerance,
+        const double composition_tolerance,
+        const double topography_tolerance)
+      {
+        const WorldBuilder::Grid::Config grid_config =
+          WorldBuilder::Grid::parse_config(grid_text, resolution_limit);
+        WorldBuilder::Web::AdaptiveConfig adaptive_config;
+        adaptive_config.base_resolution = base_resolution;
+        adaptive_config.max_depth = max_depth;
+        adaptive_config.max_cells = max_cells;
+        adaptive_config.temperature_tolerance = temperature_tolerance;
+        adaptive_config.composition_tolerance = composition_tolerance;
+        adaptive_config.topography_tolerance = topography_tolerance;
+
+        const WorldBuilder::Web::AdaptiveResult adaptive =
+          WorldBuilder::Web::sample_adaptive(*world,
+                                             grid_config,
+                                             adaptive_config);
+        const WorldBuilder::Grid::Result &result = adaptive.grid;
+
+        emscripten::val output = emscripten::val::object();
+        output.set("dimension", result.dimension);
+        output.set("compositionCount", result.compositions);
+        output.set("cells", copy_cells(result.cells));
+        output.set("points", copy_typed_array("Float64Array", result.points));
+        output.set("connectivity",
+                   copy_typed_array("Uint32Array", result.connectivity));
+        output.set("depthWrtSurface",
+                   copy_typed_array("Float64Array",
+                                    result.depth_wrt_surface));
+        output.set("depthWrtReference",
+                   copy_typed_array("Float64Array",
+                                    result.depth_wrt_reference));
+        output.set("topography",
+                   copy_typed_array("Float64Array", result.topography));
+        output.set("temperature",
+                   copy_typed_array("Float64Array", result.temperature));
+        output.set("velocity",
+                   copy_typed_array("Float64Array", result.velocity));
+        output.set("tags", copy_typed_array("Int32Array", result.tags));
+        output.set("density",
+                   copy_typed_array("Float64Array", result.density));
+        output.set("composition",
+                   copy_typed_array("Float64Array", result.composition));
+        output.set("adaptive", true);
+        output.set("structured", false);
+        output.set("cellBounds",
+                   copy_typed_array("Float64Array", adaptive.cell_bounds));
+        output.set("cellLevels",
+                   copy_typed_array("Uint8Array", adaptive.cell_levels));
+        output.set("leafCellCount",
+                   static_cast<double>(adaptive.leaf_count()));
+        output.set("adaptiveBaseResolution", adaptive.base_resolution);
+        output.set("adaptiveMaximumLevel", adaptive.maximum_level);
+        output.set("cellLimitReached", adaptive.cell_limit_reached);
+        return output;
+      }
+
     private:
       std::string model_path;
       std::unique_ptr<WorldBuilder::World> world;
@@ -115,5 +181,6 @@ EMSCRIPTEN_BINDINGS(gwb_browser)
 {
   emscripten::class_<BrowserSession>("BrowserSession")
     .constructor<const std::string &>()
-    .function("sampleGrid", &BrowserSession::sample_grid);
+    .function("sampleGrid", &BrowserSession::sample_grid)
+    .function("sampleAdaptiveGrid", &BrowserSession::sample_adaptive_grid);
 }

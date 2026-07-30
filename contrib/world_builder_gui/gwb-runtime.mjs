@@ -3,9 +3,18 @@ const ARRAY_FIELDS = [
   "topography", "temperature", "velocity", "tags", "density", "composition"
 ];
 
+const DEFAULT_ADAPTIVE_OPTIONS = {
+  baseResolution: 4,
+  maxDepth: 4,
+  maxCells: 100000,
+  temperatureTolerance: 25,
+  compositionTolerance: 0.05,
+  topographyTolerance: 250
+};
+
 export class GwbRuntime {
   constructor({
-    workerUrl = new URL("./gwb-worker.mjs", import.meta.url),
+    workerUrl = new URL("./gwb-worker.mjs?v=2", import.meta.url),
     workerFactory = url => new Worker(url, { type: "module" })
   } = {}) {
     this.workerUrl = workerUrl;
@@ -19,7 +28,13 @@ export class GwbRuntime {
     return this.active !== null;
   }
 
-  run({ wbText, gridText, resolutionLimit = 256 }, {
+  run({
+    wbText,
+    gridText,
+    resolutionLimit = 256,
+    sampling = "uniform",
+    adaptiveOptions = {}
+  }, {
     signal,
     onProgress = () => {}
   } = {}) {
@@ -31,6 +46,26 @@ export class GwbRuntime {
     }
     if (!Number.isInteger(resolutionLimit) || resolutionLimit < 1) {
       return Promise.reject(new TypeError("resolutionLimit must be a positive integer."));
+    }
+    if (!["uniform", "adaptive"].includes(sampling)) {
+      return Promise.reject(new TypeError("sampling must be uniform or adaptive."));
+    }
+    const adaptive = { ...DEFAULT_ADAPTIVE_OPTIONS, ...adaptiveOptions };
+    if (sampling === "adaptive") {
+      const positiveIntegers = ["baseResolution", "maxCells"];
+      const nonNegativeIntegers = ["maxDepth"];
+      const nonNegativeNumbers = [
+        "temperatureTolerance", "compositionTolerance", "topographyTolerance"
+      ];
+      if (positiveIntegers.some(key =>
+        !Number.isInteger(adaptive[key]) || adaptive[key] < 1
+      ) || nonNegativeIntegers.some(key =>
+        !Number.isInteger(adaptive[key]) || adaptive[key] < 0
+      ) || nonNegativeNumbers.some(key =>
+        !Number.isFinite(adaptive[key]) || adaptive[key] < 0
+      )) {
+        return Promise.reject(new TypeError("Invalid adaptive sampling options."));
+      }
     }
     if (this.busy) {
       return Promise.reject(new Error("A GWB browser calculation is already running."));
@@ -54,7 +89,7 @@ export class GwbRuntime {
         cleanup: () => signal?.removeEventListener("abort", abort)
       };
       this.worker.postMessage({
-        type: "run", id, wbText, gridText, resolutionLimit
+        type: "run", id, wbText, gridText, resolutionLimit, sampling, adaptive
       });
     });
   }
@@ -136,6 +171,21 @@ export function validateResult(result) {
   }
   if (result.composition.length !== pointCount * result.compositionCount) {
     throw new TypeError("GWB returned inconsistent composition data.");
+  }
+  if (result.adaptive) {
+    if (!(result.cellBounds instanceof Float64Array) ||
+        !(result.cellLevels instanceof Uint8Array) ||
+        result.cellBounds.length !== result.cellLevels.length * 6 ||
+        result.connectivity.length !==
+          result.cellLevels.length * (result.dimension === 2 ? 4 : 8)) {
+      throw new TypeError("GWB returned inconsistent adaptive-cell data.");
+    }
+    if (!Number.isInteger(result.adaptiveBaseResolution) ||
+        result.adaptiveBaseResolution < 1 ||
+        !Number.isInteger(result.adaptiveMaximumLevel) ||
+        result.adaptiveMaximumLevel < 0) {
+      throw new TypeError("GWB returned invalid adaptive-grid metadata.");
+    }
   }
   return result;
 }

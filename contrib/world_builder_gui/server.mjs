@@ -15,6 +15,7 @@ const mime = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".mjs": "text/javascript; charset=utf-8",
+  ".wasm": "application/wasm",
   ".json": "application/json; charset=utf-8",
   ".png": "image/png"
 };
@@ -124,6 +125,25 @@ async function findTomographyDataDirectory() {
 createServer(async (request, response) => {
   const requestUrl = new URL(request.url, "http://localhost");
   const pathname = decodeURIComponent(requestUrl.pathname);
+  if (pathname === "/api/version") {
+    try {
+      const version = String(await readFile(join(worldBuilderRoot, "VERSION"), "utf8")).trim();
+      response.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store"
+      });
+      response.end(JSON.stringify({
+        name: "Geodynamic World Builder",
+        version,
+        schemaVersion: version.split(".").slice(0, 2).join("."),
+        webAssembly: true
+      }));
+    } catch (error) {
+      response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end(`Could not read the GWB version: ${error.message}`);
+    }
+    return;
+  }
   if (pathname === "/assets/gwb-logo.png") {
     try {
       response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "public, max-age=3600" });
