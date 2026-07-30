@@ -84,6 +84,7 @@ const DEFAULT_SCENE_LAYERS = {
 const DEFAULT_UI = {
   paletteCollapsed: false, inspectorCollapsed: false, splitView: false,
   linkedCameras: true, secondaryView: "three-d", secondaryCamera: null,
+  sectionPlaneVisible: true, sectionPreset: "custom",
   cameraControls: null, floatingEditors: {}, areaPlacementShape: "rectangle", linePlacementShape: "straight",
   gravityLegendPositions: { primary: null, secondary: null },
   cameraControlsExpanded: false,
@@ -230,7 +231,11 @@ let gravityLegendDrag = null;
 let gravityLegendBounds = { primary: null, secondary: null };
 let sectionContourDrag = null;
 let selectedSectionContour = null;
+let sectionLayerDrag = null;
+let selectedSectionLayer = null;
+let sectionPlaneDrag = null;
 const sectionInteractionGeometry = new Map();
+const sectionPlaneInteractionGeometry = new Map();
 let floatingEditorDrag = null;
 let floatingEditorZ = 10;
 let researchTimer = null;
@@ -699,6 +704,7 @@ function applyWorkspaceUI() {
   document.querySelector("#link-cameras").classList.toggle("hidden", !state.ui.splitView);
   document.querySelector("#link-cameras").classList.toggle("active", state.ui.linkedCameras);
   document.querySelector("#link-cameras").setAttribute("aria-pressed", String(state.ui.linkedCameras));
+  syncSectionPlaneControls();
   syncCameraControlsExpansion();
   requestAnimationFrame(resize);
 }
@@ -2951,6 +2957,7 @@ function finishSectionPath() {
   }
   state.sectionPath = sectionDraft.map(point => [...point]);
   state.settings.section = [[...sectionDraft[0]], [...sectionDraft.at(-1)]];
+  state.ui.sectionPreset = "custom";
   sectionDraft = [];
   selectedSectionPointIndex = null;
   sectionPathDrag = null;
@@ -2959,6 +2966,44 @@ function finishSectionPath() {
   syncSectionActions();
   updateAll();
   showToast("Curved section saved · GWB export uses its first and last points");
+}
+
+function axisSectionPath(axis) {
+  const xMin = Number(state.settings.xMin);
+  const xMax = Number(state.settings.xMax);
+  const yMin = Number(state.settings.yMin);
+  const yMax = Number(state.settings.yMax);
+  const midX = (xMin + xMax) / 2;
+  const midY = (yMin + yMax) / 2;
+  if (axis === "x") return [[xMin, midY], [xMax, midY]];
+  if (axis === "y") return [[midX, yMin], [midX, yMax]];
+  const halfWidth = Math.max(Math.abs(xMax - xMin) * .015,
+    state.settings.coordinateSystem === "spherical" ? .05 : 1000);
+  return [[midX - halfWidth, midY], [midX + halfWidth, midY]];
+}
+
+function syncSectionPlaneControls() {
+  const visible = state.ui.sectionPlaneVisible !== false;
+  const visibilityInput = document.querySelector("#show-section-plane-3d");
+  if (visibilityInput) visibilityInput.checked = visible;
+  document.querySelectorAll("[data-section-preset]").forEach(button => {
+    button.classList.toggle("active", button.dataset.sectionPreset === state.ui.sectionPreset);
+  });
+}
+
+function applySectionPreset(axis) {
+  const path = axisSectionPath(axis);
+  state.sectionPath = path;
+  state.settings.section = path.map(point => [...point]);
+  state.ui.sectionPreset = axis;
+  state.ui.sectionPlaneVisible = true;
+  sectionDraft = [];
+  selectedSectionPointIndex = null;
+  syncSectionPlaneControls();
+  persist();
+  draw();
+  const label = axis === "z" ? "Z column" : `${axis.toUpperCase()}-axis section`;
+  showToast(`${label} centred in the model · drag its gold endpoints in 3D`);
 }
 
 function cancelSectionPath() {
@@ -3257,6 +3302,115 @@ function project3D([x, y], depth = 0) {
     width * 0.5 + horizontal * width * 0.62,
     height * 0.24 + distance * height * 0.44 * Math.sin(pitch) + nd * height * 0.64 * Math.cos(pitch)
   ];
+}
+
+function unproject3DSurface([screenX, screenY]) {
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  const { xMin, xMax, yMin, yMax, zMin, zMax } = state.settings;
+  const yaw = Number(renderCamera.orbitYaw ?? -25) * Math.PI / 180;
+  const pitch = Number(renderCamera.orbitPitch ?? 28) * Math.PI / 180;
+  const horizontal = (screenX - width * .5) / Math.max(1, width * .62);
+  const depthOffset = ((Number(zMin) - Number(zMin)) / Math.max(1, Number(zMax) - Number(zMin)))
+    * height * .64 * Math.cos(pitch);
+  const pitchScale = height * .44 * Math.sin(pitch);
+  if (Math.abs(pitchScale) < 1e-4) return null;
+  const distance = (screenY - height * .24 - depthOffset) / pitchScale;
+  const nx = horizontal * Math.cos(yaw) + distance * Math.sin(yaw);
+  const ny = -horizontal * Math.sin(yaw) + distance * Math.cos(yaw);
+  return [
+    Math.max(Number(xMin), Math.min(Number(xMax), Number(xMin) + (nx / 1.15 + .5) * (Number(xMax) - Number(xMin)))),
+    Math.max(Number(yMin), Math.min(Number(yMax), Number(yMin) + (ny / 1.15 + .5) * (Number(yMax) - Number(yMin))))
+  ];
+}
+
+function drawSectionPlane3D() {
+  if (state.ui.sectionPlaneVisible === false || state.settings.coordinateSystem === "spherical") {
+    sectionPlaneInteractionGeometry.delete(canvas);
+    return;
+  }
+  const path = activeSectionPath();
+  if (path.length < 2) return;
+  const topDepth = Number(state.settings.zMin) || 0;
+  const bottomDepth = Math.max(topDepth + 1, Number(state.settings.zMax) || topDepth + 1);
+  context.save();
+  for (let index = 0; index < path.length - 1; index++) {
+    const quad = [
+      project3D(path[index], topDepth),
+      project3D(path[index + 1], topDepth),
+      project3D(path[index + 1], bottomDepth),
+      project3D(path[index], bottomDepth)
+    ];
+    context.fillStyle = "rgba(240,202,102,.12)";
+    context.strokeStyle = "rgba(240,202,102,.72)";
+    context.lineWidth = 1.5;
+    context.setLineDash([6, 4]);
+    context.beginPath();
+    context.moveTo(...quad[0]);
+    quad.slice(1).forEach(point => context.lineTo(...point));
+    context.closePath();
+    context.fill();
+    context.stroke();
+  }
+  const surface = path.map(point => project3D(point, topDepth));
+  context.setLineDash([]);
+  context.strokeStyle = "#f0ca66";
+  context.lineWidth = 3;
+  context.beginPath();
+  context.moveTo(...surface[0]);
+  surface.slice(1).forEach(point => context.lineTo(...point));
+  context.stroke();
+  const handles = [0, path.length - 1].map(index => ({ index, point: surface[index] }));
+  handles.forEach(handle => {
+    context.beginPath();
+    context.arc(handle.point[0], handle.point[1], 6, 0, Math.PI * 2);
+    context.fillStyle = "#fff0a8";
+    context.strokeStyle = canvasPalette().deep;
+    context.lineWidth = 2;
+    context.fill();
+    context.stroke();
+  });
+  context.fillStyle = "#f0ca66";
+  context.font = "700 9px ui-monospace";
+  context.fillText(`${String(state.ui.sectionPreset || "custom").toUpperCase()} SECTION · DRAG ENDPOINTS`, surface[0][0] + 10, surface[0][1] - 9);
+  context.restore();
+  sectionPlaneInteractionGeometry.set(canvas, { handles });
+}
+
+function beginSectionPlaneInteraction(targetCanvas, event, point) {
+  if (state.ui.sectionPlaneVisible === false) return false;
+  const geometry = sectionPlaneInteractionGeometry.get(targetCanvas);
+  const hit = geometry?.handles?.find(handle => Math.hypot(point[0] - handle.point[0], point[1] - handle.point[1]) <= 12);
+  if (!hit) return false;
+  event.preventDefault();
+  sectionPlaneDrag = { canvas: targetCanvas, pointerId: event.pointerId, index: hit.index };
+  targetCanvas.setPointerCapture(event.pointerId);
+  targetCanvas.style.cursor = "crosshair";
+  return true;
+}
+
+function moveSectionPlane(targetCanvas, point) {
+  if (!sectionPlaneDrag || sectionPlaneDrag.canvas !== targetCanvas) return false;
+  const world = unproject3DSurface(point);
+  if (!world) return false;
+  const path = activeSectionPath().map(item => [...item]);
+  path[sectionPlaneDrag.index] = world;
+  state.sectionPath = path;
+  state.settings.section = [[...path[0]], [...path.at(-1)]];
+  state.ui.sectionPreset = "custom";
+  syncSectionPlaneControls();
+  draw();
+  return true;
+}
+
+function finishSectionPlaneInteraction(targetCanvas) {
+  if (!sectionPlaneDrag || sectionPlaneDrag.canvas !== targetCanvas) return false;
+  sectionPlaneDrag = null;
+  targetCanvas.style.cursor = "grab";
+  persist();
+  draw();
+  showToast("3D section orientation updated");
+  return true;
 }
 
 function slabDirection(feature, spherical = false) {
@@ -3646,6 +3800,7 @@ function draw3DView(width, height) {
     }
     context.restore();
   }
+  drawSectionPlane3D();
   context.fillStyle = palette.muted;
   context.font = "10px ui-monospace";
   context.fillText("Interactive volume preview · depth increases downward · topography vertically exaggerated ×12", 18, height - 18);
@@ -3856,6 +4011,24 @@ function traceSectionBand(feature, topRatio, bottomRatio, range, pad, plotHeight
   context.closePath();
 }
 
+function sectionBandPoint(feature, ratio, position, range, pad, plotHeight, maxDepth) {
+  const profile = sectionDepthProfile(feature);
+  const top = interpolateSectionContour(profile.top, position);
+  const bottom = interpolateSectionContour(profile.bottom, position);
+  return [
+    range.left + position * (range.right - range.left),
+    pad.top + (top + (bottom - top) * ratio) / maxDepth * plotHeight
+  ];
+}
+
+function traceSectionLayerBoundary(feature, ratio, range, pad, plotHeight, maxDepth, steps = 32) {
+  const points = Array.from({ length: steps + 1 }, (_, index) =>
+    sectionBandPoint(feature, ratio, index / steps, range, pad, plotHeight, maxDepth));
+  context.beginPath();
+  context.moveTo(...points[0]);
+  points.slice(1).forEach(point => context.lineTo(...point));
+}
+
 function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plotHeight, maxDepth, geometry) {
   const range = sectionFeatureRange(feature, section, pad, plotWidth);
   const profile = sectionDepthProfile(feature);
@@ -3872,6 +4045,41 @@ function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plot
         ? temperatureColor(layer.temperature, .72)
         : `hsla(${172 + layerIndex * 31}, 48%, 52%, .32)`;
       context.fill();
+      geometry.layerRegions.push({
+        featureId: feature.id, layerIndex, topRatio: layerTopRatio, bottomRatio: layerBottomRatio,
+        range, pad, plotHeight, maxDepth
+      });
+    });
+    feature.layers.slice(0, -1).forEach((layer, boundaryIndex) => {
+      const ratio = Math.max(0, Math.min(1, (Number(layer.maxDepth) - topDepth) / depthSpan));
+      traceSectionLayerBoundary(feature, ratio, range, pad, plotHeight, maxDepth);
+      const selected = selectedSectionLayer?.featureId === feature.id
+        && (selectedSectionLayer.layerIndex === boundaryIndex || selectedSectionLayer.layerIndex === boundaryIndex + 1);
+      context.save();
+      context.strokeStyle = selected ? "#f0ca66" : "rgba(205,224,218,.65)";
+      context.lineWidth = selected ? 2 : 1;
+      context.setLineDash(selected ? [] : [4, 3]);
+      context.stroke();
+      context.restore();
+      if (featureIsSelected(feature.id) && !renderOptions.suppressFeatureHandles) {
+        const point = sectionBandPoint(feature, ratio, .5, range, pad, plotHeight, maxDepth);
+        geometry.layerHandles.push({
+          featureId: feature.id, boundaryIndex, point, range, pad, plotHeight, maxDepth,
+          topDepth, bottomDepth, depthSpan
+        });
+        context.save();
+        context.translate(point[0], point[1]);
+        context.rotate(Math.PI / 4);
+        context.fillStyle = selected ? "#fff0a8" : "#f0ca66";
+        context.strokeStyle = canvasPalette().deep;
+        context.lineWidth = 1.5;
+        context.fillRect(-5, -5, 10, 10);
+        context.strokeRect(-5, -5, 10, 10);
+        context.restore();
+        context.fillStyle = canvasPalette().text;
+        context.font = "600 8px ui-monospace";
+        context.fillText(`${(Number(layer.maxDepth) / 1000).toFixed(1)} km`, point[0] + 9, point[1] - 6);
+      }
     });
   } else if (!renderOptions.featureContoursOnly) {
     traceSectionBand(feature, 0, 1, range, pad, plotHeight, maxDepth);
@@ -3907,8 +4115,24 @@ function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plot
 function sectionHit(targetCanvas, point) {
   const geometry = sectionInteractionGeometry.get(targetCanvas);
   if (!geometry) return null;
+  const layerHandle = geometry.layerHandles.find(item => Math.hypot(point[0] - item.point[0], point[1] - item.point[1]) <= 11);
+  if (layerHandle) return { type: "layer-handle", ...layerHandle };
   const handle = geometry.handles.find(item => Math.hypot(point[0] - item.point[0], point[1] - item.point[1]) <= 10);
   if (handle) return { type: "handle", ...handle };
+  const layerRegion = [...geometry.layerRegions].reverse().find(item => {
+    if (point[0] < item.range.left || point[0] > item.range.right) return false;
+    const position = (point[0] - item.range.left) / Math.max(1, item.range.right - item.range.left);
+    const top = sectionBandPoint(
+      state.features.find(feature => feature.id === item.featureId),
+      item.topRatio, position, item.range, item.pad, item.plotHeight, item.maxDepth
+    )[1];
+    const bottom = sectionBandPoint(
+      state.features.find(feature => feature.id === item.featureId),
+      item.bottomRatio, position, item.range, item.pad, item.plotHeight, item.maxDepth
+    )[1];
+    return point[1] >= top && point[1] <= bottom;
+  });
+  if (layerRegion) return { type: "layer-region", ...layerRegion };
   const region = [...geometry.regions].reverse().find(item => {
     if (point[0] < item.range.left || point[0] > item.range.right) return false;
     const position = (point[0] - item.range.left) / Math.max(1, item.range.right - item.range.left);
@@ -3923,7 +4147,20 @@ function beginSectionContourInteraction(targetCanvas, event, point) {
   const hit = sectionHit(targetCanvas, point);
   if (!hit) return false;
   selectFeature(hit.featureId);
-  if (hit.type === "handle") {
+  if (hit.type === "layer-handle") {
+    selectedSectionLayer = { featureId: hit.featureId, layerIndex: hit.boundaryIndex };
+    sectionLayerDrag = { ...hit, pointerId: event.pointerId, canvas: targetCanvas };
+    targetCanvas.setPointerCapture(event.pointerId);
+    targetCanvas.style.cursor = "row-resize";
+  } else if (hit.type === "layer-region") {
+    selectedSectionLayer = { featureId: hit.featureId, layerIndex: hit.layerIndex };
+    requestAnimationFrame(() => {
+      const row = document.querySelector(`.layer-row[data-layer-index="${hit.layerIndex}"]`);
+      document.querySelectorAll(".layer-row.section-active").forEach(item => item.classList.remove("section-active"));
+      row?.classList.add("section-active");
+      row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  } else if (hit.type === "handle") {
     const feature = state.features.find(item => item.id === hit.featureId);
     sectionDepthProfile(feature, true);
     selectedSectionContour = { featureId: hit.featureId, contour: hit.contour, index: hit.index };
@@ -3936,6 +4173,28 @@ function beginSectionContourInteraction(targetCanvas, event, point) {
 }
 
 function moveSectionContour(targetCanvas, event, point) {
+  if (sectionLayerDrag?.canvas === targetCanvas) {
+    const feature = state.features.find(item => item.id === sectionLayerDrag.featureId);
+    const upper = feature?.layers?.[sectionLayerDrag.boundaryIndex];
+    const lower = feature?.layers?.[sectionLayerDrag.boundaryIndex + 1];
+    if (!feature || !upper || !lower) return false;
+    const position = Math.max(0, Math.min(1,
+      (point[0] - sectionLayerDrag.range.left) / Math.max(1, sectionLayerDrag.range.right - sectionLayerDrag.range.left)));
+    const profile = sectionDepthProfile(feature);
+    const contourTop = interpolateSectionContour(profile.top, position);
+    const contourBottom = interpolateSectionContour(profile.bottom, position);
+    const candidateContourDepth = Math.max(contourTop, Math.min(contourBottom,
+      (point[1] - sectionLayerDrag.pad.top) / sectionLayerDrag.plotHeight * sectionLayerDrag.maxDepth));
+    const ratio = (candidateContourDepth - contourTop) / Math.max(1, contourBottom - contourTop);
+    const candidate = sectionLayerDrag.topDepth + ratio * sectionLayerDrag.depthSpan;
+    const boundary = Math.max(Number(upper.minDepth) + 1000, Math.min(Number(lower.maxDepth) - 1000, candidate));
+    upper.maxDepth = boundary;
+    lower.minDepth = boundary;
+    feature.layersEdited = true;
+    feature.layerMode = "depths";
+    draw();
+    return true;
+  }
   if (!sectionContourDrag || sectionContourDrag.canvas !== targetCanvas) return false;
   const feature = state.features.find(item => item.id === sectionContourDrag.featureId);
   if (!feature) return false;
@@ -3959,6 +4218,15 @@ function moveSectionContour(targetCanvas, event, point) {
 }
 
 function finishSectionContourInteraction(targetCanvas) {
+  if (sectionLayerDrag?.canvas === targetCanvas) {
+    const feature = state.features.find(item => item.id === sectionLayerDrag.featureId);
+    const boundary = feature?.layers?.[sectionLayerDrag.boundaryIndex]?.maxDepth;
+    sectionLayerDrag = null;
+    targetCanvas.style.cursor = "default";
+    persist(); renderInspector(); draw();
+    showToast(`Sublayer boundary set to ${(Number(boundary) / 1000).toFixed(1)} km`);
+    return true;
+  }
   if (!sectionContourDrag || sectionContourDrag.canvas !== targetCanvas) return false;
   const feature = state.features.find(item => item.id === sectionContourDrag.featureId);
   sectionContourDrag = null;
@@ -3969,7 +4237,12 @@ function finishSectionContourInteraction(targetCanvas) {
 }
 
 function addSectionContourControl(targetCanvas, point) {
-  const hit = sectionHit(targetCanvas, point);
+  let hit = sectionHit(targetCanvas, point);
+  if (hit?.type === "layer-region") {
+    const region = sectionInteractionGeometry.get(targetCanvas)?.regions
+      .find(item => item.featureId === hit.featureId);
+    if (region) hit = { type: "region", ...region };
+  }
   if (!hit || hit.type !== "region") return false;
   const feature = state.features.find(item => item.id === hit.featureId);
   if (!feature || ["subducting plate", "fault"].includes(feature.model)) return false;
@@ -4017,7 +4290,7 @@ function drawSectionProfile(width, height) {
     ? [...(feature.sectionDepthProfile.top || []), ...(feature.sectionDepthProfile.bottom || [])].map(point => Number(point[1]) || 0)
     : []);
   const maxDepth = Math.max(state.settings.zMax - state.settings.zMin, ...visibleFeatures.map(feature => feature.maxDepth || 0), ...profileDepths, 1);
-  const interactionGeometry = { handles: [], regions: [] };
+  const interactionGeometry = { handles: [], regions: [], layerHandles: [], layerRegions: [] };
   sectionInteractionGeometry.set(canvas, interactionGeometry);
   if (sceneLayerVisible("grid")) {
     context.strokeStyle = "#31434b"; context.strokeRect(pad.left, pad.top, plotWidth, plotHeight);
@@ -4464,6 +4737,7 @@ function revealSelectedFeatureProperties() {
 
 function selectFeature(id, additive = false, preserveGroup = false) {
   if (selectedSectionContour?.featureId !== id) selectedSectionContour = null;
+  if (selectedSectionLayer?.featureId !== id) selectedSectionLayer = null;
   if (!id) {
     selectedId = null;
     selectedIds.clear();
@@ -4876,7 +5150,7 @@ function layerEditor(feature) {
       </div>
       <div id="layer-list" class="layer-list">
         ${layers.map((layer, index) => `
-          <div class="layer-row" data-layer-index="${index}">
+          <div class="layer-row ${selectedSectionLayer?.featureId === feature.id && selectedSectionLayer.layerIndex === index ? "section-active" : ""}" data-layer-index="${index}">
             <div class="layer-row-title"><strong><i style="--layer-index:${index}"></i>Layer ${index + 1}</strong><button data-remove-layer="${index}" class="ghost" title="Remove layer">×</button></div>
             <label>Symbolic name<input data-layer-key="name" data-layer-index="${index}" type="text" value="${escapeHtml(layer.name || `Layer ${index + 1}`)}"></label>
             <div class="form-grid">
@@ -4930,6 +5204,7 @@ function bindLayerEditor(panel, feature) {
     }));
     feature.layersEdited = true;
     feature.layerMode = "count";
+    selectedSectionLayer = { featureId: feature.id, layerIndex: 0 };
     syncCompositionCount();
     updateAll();
     showToast(`${feature.name} split into ${count} layers`);
@@ -7213,6 +7488,7 @@ canvas.addEventListener("pointerdown", event => {
     return;
   }
   if (viewMode === "three-d" && event.button === 0) {
+    if (beginSectionPlaneInteraction(canvas, event, canvasPoint(event))) return;
     event.preventDefault();
     cameraDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, mode: "orbit" };
     canvas.style.cursor = "grabbing";
@@ -7373,6 +7649,7 @@ canvas.addEventListener("dblclick", event => {
 canvas.addEventListener("pointermove", event => {
   const legendPoint = rawCanvasPoint(canvas, event);
   if (moveGravityLegend(event, legendPoint)) return;
+  if (sectionPlaneDrag?.canvas === canvas && moveSectionPlane(canvas, canvasPoint(event))) return;
   if (!cameraDrag && !drag && !marqueeSelection && gravityLegendHit("primary", legendPoint)) {
     canvas.style.cursor = "grab";
     return;
@@ -7499,6 +7776,7 @@ canvas.addEventListener("pointermove", event => {
 });
 canvas.addEventListener("pointerup", () => {
   if (finishGravityLegendDrag(canvas)) return;
+  if (finishSectionPlaneInteraction(canvas)) return;
   if (finishSectionContourInteraction(canvas)) return;
   if (sectionPathDrag) {
     sectionPathDrag = null;
@@ -7553,6 +7831,7 @@ canvas.addEventListener("pointerleave", () => {
 });
 canvas.addEventListener("pointercancel", () => {
   if (finishGravityLegendDrag(canvas)) return;
+  if (finishSectionPlaneInteraction(canvas)) return;
   if (finishSectionContourInteraction(canvas)) return;
   sectionPathDrag = null;
   cameraDrag = null;
@@ -7617,6 +7896,8 @@ secondaryCanvas.addEventListener("pointerdown", event => {
     beginSectionContourInteraction(secondaryCanvas, event, canvasPoint(event));
     return;
   }
+  if (viewportModes.secondary === "three-d" && event.button === 0
+    && beginSectionPlaneInteraction(secondaryCanvas, event, canvasPoint(event))) return;
   const orbit = viewportModes.secondary === "three-d" && event.button === 0 && !cameraPanMode && !event.shiftKey;
   if (!(orbit || cameraPanMode || event.shiftKey || event.button === 1 || event.button === 2)) return;
   event.preventDefault();
@@ -7630,6 +7911,7 @@ secondaryCanvas.addEventListener("pointermove", event => {
     if (!moveSectionContour(secondaryCanvas, event, hoverPoint)) draw();
     return;
   }
+  if (sectionPlaneDrag?.canvas === secondaryCanvas && moveSectionPlane(secondaryCanvas, canvasPoint(event))) return;
   const point = rawCanvasPoint(secondaryCanvas, event);
   if (moveGravityLegend(event, point)) return;
   if (!cameraDrag && gravityLegendHit("secondary", point)) {
@@ -7644,6 +7926,7 @@ secondaryCanvas.addEventListener("pointermove", event => {
 });
 secondaryCanvas.addEventListener("pointerup", () => {
   if (finishGravityLegendDrag(secondaryCanvas)) return;
+  if (finishSectionPlaneInteraction(secondaryCanvas)) return;
   if (finishSectionContourInteraction(secondaryCanvas)) return;
   if (cameraDrag?.viewport !== "secondary") return;
   cameraDrag = null;
@@ -7652,6 +7935,7 @@ secondaryCanvas.addEventListener("pointerup", () => {
 });
 secondaryCanvas.addEventListener("pointercancel", () => {
   if (finishGravityLegendDrag(secondaryCanvas)) return;
+  if (finishSectionPlaneInteraction(secondaryCanvas)) return;
   if (finishSectionContourInteraction(secondaryCanvas)) return;
   if (cameraDrag?.viewport === "secondary") cameraDrag = null;
   secondaryCanvas.style.cursor = cameraPanMode || viewportModes.secondary === "three-d" ? "grab" : "default";
@@ -8007,6 +8291,27 @@ document.querySelector("#toggle-split-view").addEventListener("click", () => {
   updateViewportLabels();
   persist();
   showToast(state.ui.splitView ? "Split view enabled · click A or B to select a viewport" : "Single viewport restored");
+});
+document.querySelector("#open-section-split").addEventListener("click", () => {
+  state.ui.splitView = true;
+  viewportModes.primary = "section";
+  viewportModes.secondary = "three-d";
+  state.ui.secondaryView = "three-d";
+  setActiveViewport("primary");
+  applyWorkspaceUI();
+  updateViewportLabels();
+  persist();
+  draw();
+  showToast("Depth section and 3D view opened together");
+});
+document.querySelectorAll("[data-section-preset]").forEach(button => button.addEventListener("click", () => {
+  applySectionPreset(button.dataset.sectionPreset);
+}));
+document.querySelector("#show-section-plane-3d").addEventListener("change", event => {
+  state.ui.sectionPlaneVisible = event.target.checked;
+  persist();
+  draw();
+  showToast(event.target.checked ? "Section plane visible in 3D" : "Section plane hidden in 3D");
 });
 document.querySelector("#link-cameras").addEventListener("click", () => {
   state.ui.linkedCameras = !state.ui.linkedCameras;

@@ -318,6 +318,14 @@
             <button id="toggle-color-editor" class="icon-button" aria-expanded="false">Color map editor</button>
             <button id="toggle-split-view" class="icon-button" title="Split the viewport for side-by-side comparison">Split view</button>
             <button id="link-cameras" class="icon-button hidden" title="Keep zoom, rotation and pan synchronized" aria-pressed="true">🔗 Cameras</button>
+            <small>SECTION VIEW</small>
+            <button id="open-section-split" class="icon-button" title="Open the depth section beside the 3D view">Section + 3D</button>
+            <div class="section-preset-buttons" aria-label="Section axis presets">
+              <button data-section-preset="x" title="Section along the X axis">X</button>
+              <button data-section-preset="y" title="Section along the Y axis">Y</button>
+              <button data-section-preset="z" title="Vertical column through the domain centre">Z</button>
+            </div>
+            <label class="toolbar-check"><input id="show-section-plane-3d" type="checkbox" checked> Show section in 3D</label>
             <button id="export-screenshot" class="icon-button" title="Save the current viewport layout as a PNG">📷 Screenshot PNG</button>
           </div>
         </details>
