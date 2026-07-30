@@ -293,6 +293,10 @@ body[data-theme="light"] .placement-shape-picker { background: linear-gradient(1
   border-radius: 8px;
   background: rgba(54, 116, 102, .08);
 }
+.adaptive-computation-options .adaptive-mesh-toggle {
+  margin: 9px 0 4px;
+  color: #8de0cd;
+}
 .compute-action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; }
 .compute-action-grid button { min-height: 44px; padding: 7px; font-size: 9px; line-height: 1.25; }
 .compute-progress { height: 6px; margin: 10px 0 7px; overflow: hidden; border-radius: 999px; background: var(--canvas); }

@@ -2249,13 +2249,12 @@ function adaptiveCellLookup(result) {
   return lookup;
 }
 
-function adaptiveTemperatureAt(result, u, v, w) {
+function adaptiveCellAt(result, u, v, w) {
   const clampedU = Math.max(0, Math.min(1, Number(u)));
   const clampedV = Math.max(0, Math.min(1, Number(v)));
   const clampedW = Math.max(0, Math.min(1, Number(w)));
   const base = Number(result.adaptiveBaseResolution);
   const lookup = adaptiveCellLookup(result);
-  let cell = -1;
   for (let level = Number(result.adaptiveMaximumLevel); level >= 0; level--) {
     const scale = base * 2 ** level;
     const i = Math.min(scale - 1, Math.floor(clampedU * scale));
@@ -2265,10 +2264,17 @@ function adaptiveTemperatureAt(result, u, v, w) {
     const k = Math.min(scale - 1, Math.floor(clampedW * scale));
     const candidate = lookup.get(`${level}:${i}:${j}:${k}`);
     if (candidate !== undefined) {
-      cell = candidate;
-      break;
+      return candidate;
     }
   }
+  return -1;
+}
+
+function adaptiveTemperatureAt(result, u, v, w) {
+  const clampedU = Math.max(0, Math.min(1, Number(u)));
+  const clampedV = Math.max(0, Math.min(1, Number(v)));
+  const clampedW = Math.max(0, Math.min(1, Number(w)));
+  const cell = adaptiveCellAt(result, clampedU, clampedV, clampedW);
   if (cell < 0) return NaN;
 
   const bounds = cell * 6;
@@ -2294,6 +2300,114 @@ function adaptiveTemperatureAt(result, u, v, w) {
   const bottom = bottomSouth * (1 - ty) + bottomNorth * ty;
   const top = topSouth * (1 - ty) + topNorth * ty;
   return bottom * (1 - tz) + top * tz;
+}
+
+function drawAdaptiveMeshSection(section, metrics, pad, plotWidth, plotHeight) {
+  const result = computedModel?.result;
+  if (!result?.adaptive
+    || !document.querySelector("#computation-show-adaptive-mesh")?.checked
+    || !result.cellLevels?.length
+    || !(metrics.total > 0)) return;
+
+  const columns = Math.max(64, Math.min(280, Math.ceil(plotWidth / 3)));
+  const rows = Math.max(48, Math.min(180, Math.ceil(plotHeight / 3)));
+  const sampledCells = new Int32Array(columns * rows);
+  sampledCells.fill(-1);
+  for (let row = 0; row < rows; row++) {
+    const depthFraction = (row + .5) / rows;
+    const w = 1 - depthFraction;
+    for (let column = 0; column < columns; column++) {
+      const distance = (column + .5) / columns * metrics.total;
+      const point = pointAlongSectionPath(distance, section, metrics);
+      const u = (point[0] - Number(state.settings.xMin))
+        / Math.max(1e-12, Number(state.settings.xMax) - Number(state.settings.xMin));
+      const v = result.dimension === 3
+        ? (point[1] - Number(state.settings.yMin))
+          / Math.max(1e-12, Number(state.settings.yMax) - Number(state.settings.yMin))
+        : 0;
+      sampledCells[row * columns + column] = adaptiveCellAt(result, u, v, w);
+    }
+  }
+
+  const xStep = plotWidth / columns;
+  const yStep = plotHeight / rows;
+  const paths = Array.from(
+    { length: Number(result.adaptiveMaximumLevel) + 1 },
+    () => []
+  );
+  const addBoundary = (cellA, cellB, x1, y1, x2, y2) => {
+    if (cellA === cellB || cellA < 0 || cellB < 0) return;
+    const level = Math.max(
+      Number(result.cellLevels[cellA]) || 0,
+      Number(result.cellLevels[cellB]) || 0
+    );
+    paths[Math.min(paths.length - 1, level)].push([x1, y1, x2, y2]);
+  };
+
+  for (let row = 0; row < rows; row++) {
+    for (let column = 0; column < columns; column++) {
+      const cell = sampledCells[row * columns + column];
+      if (column > 0) {
+        addBoundary(
+          sampledCells[row * columns + column - 1],
+          cell,
+          pad.left + column * xStep,
+          pad.top + row * yStep,
+          pad.left + column * xStep,
+          pad.top + (row + 1) * yStep
+        );
+      }
+      if (row > 0) {
+        addBoundary(
+          sampledCells[(row - 1) * columns + column],
+          cell,
+          pad.left + column * xStep,
+          pad.top + row * yStep,
+          pad.left + (column + 1) * xStep,
+          pad.top + row * yStep
+        );
+      }
+    }
+  }
+
+  context.save();
+  context.beginPath();
+  context.rect(pad.left, pad.top, plotWidth, plotHeight);
+  context.clip();
+  context.shadowColor = "rgba(84,231,200,.45)";
+  context.shadowBlur = 2;
+  paths.forEach((segments, level) => {
+    if (!segments.length) return;
+    const fraction = paths.length > 1 ? level / (paths.length - 1) : 0;
+    context.strokeStyle = `hsla(${178 - fraction * 42}, 78%, ${62 + fraction * 12}%, .82)`;
+    context.lineWidth = level === 0 ? 1.1 : 1.6;
+    context.beginPath();
+    segments.forEach(([x1, y1, x2, y2]) => {
+      context.moveTo(x1, y1);
+      context.lineTo(x2, y2);
+    });
+    context.stroke();
+  });
+  context.strokeStyle = "rgba(141,224,205,.9)";
+  context.lineWidth = 1;
+  context.strokeRect(pad.left, pad.top, plotWidth, plotHeight);
+  context.restore();
+
+  const label = `ADAPTIVE ${result.dimension === 3 ? "OCTREE" : "QUADTREE"}`
+    + ` · ${Number(result.leafCellCount).toLocaleString()} LEAVES`
+    + ` · L0–L${result.adaptiveMaximumLevel}`;
+  context.save();
+  context.font = "700 8px ui-monospace";
+  const width = context.measureText(label).width + 12;
+  const x = pad.left + 5;
+  const y = pad.top + 7;
+  context.fillStyle = "rgba(7,18,21,.84)";
+  context.fillRect(x, y, width, 18);
+  context.strokeStyle = "rgba(141,224,205,.55)";
+  context.strokeRect(x, y, width, 18);
+  context.fillStyle = "#8de0cd";
+  context.fillText(label, x + 6, y + 12);
+  context.restore();
 }
 
 function drawComputedThermalPlan() {
@@ -3990,6 +4104,7 @@ function drawSectionProfile(width, height) {
       context.fillText(viewportFeatureLabel(feature), x + 5, Math.max(14, top - 5) + stagger);
     }
   }
+  drawAdaptiveMeshSection(section, sectionMetrics, pad, plotWidth, plotHeight);
   context.fillStyle = "#8ea1a8"; context.font = "10px ui-monospace";
   context.fillText(`SECTION · ${section.length} vertices · ${(sectionLength / 1000).toFixed(0)} km · select a feature, drag contour nodes · double-click contour to add`, pad.left, height - 16);
   drawGravitySectionProfile(width, pad, plotWidth);
@@ -8019,6 +8134,7 @@ document.querySelector("#compute-isostatic-topography").addEventListener("click"
 document.querySelector("#compute-isostatic-topography-inline").addEventListener("click", () => runModelComputation("isostatic"));
 document.querySelector("#cancel-computation").addEventListener("click", () => computationAbortController?.abort());
 document.querySelector("#computation-sampling").addEventListener("change", syncComputationUI);
+document.querySelector("#computation-show-adaptive-mesh").addEventListener("change", draw);
 document.querySelector("#computation-depth").addEventListener("input", event => {
   if (computedModel) computedModel.depthKm = Number(event.target.value);
   draw();

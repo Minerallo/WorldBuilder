@@ -750,6 +750,10 @@
               <label>Temperature tolerance (K)<input id="computation-adaptive-temperature" type="number" min="0" step="5" value="25"></label>
               <label>Maximum leaf cells<input id="computation-adaptive-cells" type="number" min="64" max="1000000" step="1000" value="100000"></label>
             </div>
+            <label class="checkbox-row adaptive-mesh-toggle">
+              <input id="computation-show-adaptive-mesh" type="checkbox" checked>
+              Show leaf-cell mesh on depth section
+            </label>
             <p class="shape-help">Cells refine around nonlinear temperature, composition, tags and topography. Isostatic calculations always use the structured grid.</p>
           </div>
           <label>Thermal opacity<input id="computation-opacity" type="range" min="5" max="100" value="78"></label>
