@@ -1,0 +1,30 @@
+{
+  "version": "1.2",
+  "cross section": [[0, 0], [1000, 0]],
+  "features": [
+    {
+      "model": "continental plate",
+      "name": "thin tracked plate",
+      "tag": "thin-feature",
+      "min depth": 0,
+      "max depth": 1000,
+      "coordinates": [[200, -100], [300, -100], [300, 100], [200, 100]],
+      "temperature models": [
+        {
+          "model": "uniform",
+          "min depth": 0,
+          "max depth": 1000,
+          "temperature": 900
+        }
+      ],
+      "composition models": [
+        {
+          "model": "uniform",
+          "min depth": 0,
+          "max depth": 1000,
+          "compositions": [1]
+        }
+      ]
+    }
+  ]
+}

@@ -130,3 +130,44 @@ TEST_CASE("Web adaptive sampler subdivides a 3D cell into octants")
   CHECK(result.grid.vertices_per_cell() == 8);
   CHECK(result.grid.temperature.size() == result.grid.point_count());
 }
+
+TEST_CASE("Web adaptive sampler tracks a thin feature between parent samples")
+{
+  const std::string model =
+    WorldBuilder::Data::WORLD_BUILDER_SOURCE_DIR +
+    "/tests/unit_tests/data/adaptive_thin_feature.wb";
+  WorldBuilder::World world(model);
+
+  const std::string grid_text =
+    "grid_type = cartesian\n"
+    "dim = 2\n"
+    "compositions = 2\n"
+    "x_min = 0\n"
+    "x_max = 1000\n"
+    "z_min = 0\n"
+    "z_max = 1000\n"
+    "n_cell_x = 8\n"
+    "n_cell_z = 8\n";
+  const WorldBuilder::Grid::Config grid =
+    WorldBuilder::Grid::parse_config(grid_text, 16);
+  WorldBuilder::Web::AdaptiveConfig config;
+  config.base_resolution = 1;
+  config.max_depth = 2;
+  config.max_cells = 16;
+  config.temperature_tolerance = 1e20;
+  config.composition_tolerance = .05;
+  config.topography_tolerance = 1e20;
+  config.refine_on_tag_change = false;
+
+  const WorldBuilder::Web::AdaptiveResult result =
+    WorldBuilder::Web::sample_adaptive(world, grid, config);
+
+  // The feature occupies x=[.2,.3]. Parent corners (x=0,1) and its centre
+  // (x=.5) all miss it, while the prospective left-child centres at x=.25
+  // detect its composition and force the quadtree split.
+  CHECK(result.leaf_count() > 4);
+  CHECK(result.maximum_level == 2);
+  CHECK(std::any_of(result.grid.composition.begin(),
+                    result.grid.composition.end(),
+                    [] (const double value) { return value > .5; }));
+}

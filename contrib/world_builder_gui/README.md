@@ -157,11 +157,14 @@ Thermal previews can also use the experimental browser-only adaptive sampler in
 `source/gwb-web/adaptive_sampler.cc`. It starts from a small quadtree (2D) or
 octree (3D), queries the real `WorldBuilder::World` property engine, and refines
 leaf cells when centre interpolation error, composition, tags, or topography
-indicate unresolved structure. Adaptive results include normalized leaf bounds
-and refinement levels, allowing the interface to interpolate plan, section, and
-3D thermal previews without requiring a structured point layout. Isostatic
-topography continues to use the uniform sampler because it integrates density
-along structured vertical columns.
+indicate unresolved structure. Prospective child centres are sampled as a
+feature-tracking stencil, so thin plates, faults, plumes, and internal layers
+can trigger refinement even when the parent corners and centre miss them.
+Adaptive results include normalized leaf bounds and refinement levels, allowing
+the interface to interpolate plan, section, and 3D thermal previews without
+requiring a structured point layout. Isostatic topography continues to use the
+uniform sampler because it integrates density along structured vertical
+columns.
 
 Adaptive calculations accept:
 

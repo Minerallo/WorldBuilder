@@ -94,9 +94,13 @@ namespace
                       adaptive_config.topography_tolerance >= 0.,
                       "Adaptive tolerances must not be negative.");
 
+        // Keep one extra binary lattice level so that the centres of the
+        // prospective child cells are exact cache keys. Those probes allow
+        // narrow features to trigger refinement even when the parent corners
+        // and centre all happen to lie outside the feature.
         const std::uint64_t scale =
           static_cast<std::uint64_t>(adaptive_config.base_resolution)
-          << adaptive_config.max_depth;
+          << (adaptive_config.max_depth + 1);
         WBAssertThrow(scale <= std::numeric_limits<std::uint32_t>::max(),
                       "Adaptive lattice resolution exceeds 32-bit limits.");
         lattice_scale = static_cast<std::uint32_t>(scale);
@@ -183,7 +187,8 @@ namespace
       std::uint32_t cell_step(const unsigned int level) const
       {
         return static_cast<std::uint32_t>(1u <<
-                                          (adaptive_config.max_depth - level));
+                                          (adaptive_config.max_depth -
+                                           level + 1));
       }
 
       std::array<LatticePoint, 8> corners(const Cell &cell) const
@@ -230,6 +235,67 @@ namespace
           : 0,
           cell.k * cell_step(cell.level) + half_step
         };
+      }
+
+      std::array<std::pair<LatticePoint, std::array<double, 3>>, 8>
+      child_centers(const Cell &cell) const
+      {
+        const std::uint32_t step = cell_step(cell.level);
+        const std::uint32_t quarter_step = step / 4;
+        std::array<std::pair<LatticePoint, std::array<double, 3>>, 8> points;
+        unsigned int index = 0;
+        for (unsigned int dk = 0; dk < 2; ++dk)
+          for (unsigned int dj = 0;
+               dj < (grid_config.dimension == 3 ? 2u : 1u);
+               ++dj)
+            for (unsigned int di = 0; di < 2; ++di)
+              {
+                const double u = di == 0 ? .25 : .75;
+                const double v =
+                  grid_config.dimension == 3 ? (dj == 0 ? .25 : .75) : 0.;
+                const double w = dk == 0 ? .25 : .75;
+                points[index++] = {
+                  {
+                    cell.i * step + (2 * di + 1) * quarter_step,
+                    grid_config.dimension == 3
+                    ? cell.j * step + (2 * dj + 1) * quarter_step
+                    : 0,
+                    cell.k * step + (2 * dk + 1) * quarter_step
+                  },
+                  {{u, v, w}}
+                };
+              }
+        return points;
+      }
+
+      double interpolate_corner_temperature(
+        const std::array<const Sample *, 8> &corner_samples,
+        const std::array<double, 3> &position) const
+      {
+        const double u = position[0];
+        const double v = position[1];
+        const double w = position[2];
+        if (grid_config.dimension == 2)
+          return corner_samples[0]->temperature * (1. - u) * (1. - w) +
+                 corner_samples[1]->temperature * u * (1. - w) +
+                 corner_samples[2]->temperature * u * w +
+                 corner_samples[3]->temperature * (1. - u) * w;
+
+        return corner_samples[0]->temperature *
+                 (1. - u) * (1. - v) * (1. - w) +
+               corner_samples[1]->temperature *
+                 u * (1. - v) * (1. - w) +
+               corner_samples[2]->temperature *
+                 u * v * (1. - w) +
+               corner_samples[3]->temperature *
+                 (1. - u) * v * (1. - w) +
+               corner_samples[4]->temperature *
+                 (1. - u) * (1. - v) * w +
+               corner_samples[5]->temperature *
+                 u * (1. - v) * w +
+               corner_samples[6]->temperature * u * v * w +
+               corner_samples[7]->temperature *
+                 (1. - u) * v * w;
       }
 
       double topography_at(const unsigned int dimension,
@@ -370,6 +436,10 @@ namespace
         const unsigned int corner_count =
           grid_config.dimension == 3 ? 8 : 4;
         const Sample &middle = sample(center(cell));
+        std::array<const Sample *, 8> corner_samples = {{
+          nullptr, nullptr, nullptr, nullptr,
+          nullptr, nullptr, nullptr, nullptr
+        }};
 
         double interpolated_temperature = 0.;
         double minimum_topography = middle.topography;
@@ -384,6 +454,7 @@ namespace
         for (unsigned int index = 0; index < corner_count; ++index)
           {
             const Sample &corner = sample(points[index]);
+            corner_samples[index] = &corner;
             interpolated_temperature += corner.temperature / corner_count;
             minimum_topography =
               std::min(minimum_topography, corner.topography);
@@ -406,6 +477,41 @@ namespace
         if (std::abs(middle.temperature - interpolated_temperature) >
             adaptive_config.temperature_tolerance)
           return true;
+
+        // Probe the centres of the cells that would be created by the next
+        // refinement. This is the feature-tracking stencil: a narrow plate,
+        // fault, plume, or sublayer can be invisible at every parent corner
+        // and at the parent centre, but still occupy one of these children.
+        const auto probes = child_centers(cell);
+        const unsigned int probe_count =
+          grid_config.dimension == 3 ? 8 : 4;
+        for (unsigned int index = 0; index < probe_count; ++index)
+          {
+            const auto &probe = probes[index];
+            const Sample &value = sample(probe.first);
+            const double interpolated =
+              interpolate_corner_temperature(corner_samples, probe.second);
+            if (std::abs(value.temperature - interpolated) >
+                adaptive_config.temperature_tolerance)
+              return true;
+            minimum_topography =
+              std::min(minimum_topography, value.topography);
+            maximum_topography =
+              std::max(maximum_topography, value.topography);
+            tag_changes = tag_changes || value.tag != first_tag;
+            for (unsigned int composition = 0;
+                 composition < grid_config.compositions;
+                 ++composition)
+              {
+                minimum_composition[composition] =
+                  std::min(minimum_composition[composition],
+                           value.composition[composition]);
+                maximum_composition[composition] =
+                  std::max(maximum_composition[composition],
+                           value.composition[composition]);
+              }
+          }
+
         if (maximum_topography - minimum_topography >
             adaptive_config.topography_tolerance)
           return true;
