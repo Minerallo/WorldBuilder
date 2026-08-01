@@ -39,6 +39,7 @@
       <input id="import-file" type="file" accept=".wb,.json" hidden>
       <button id="download-wb" class="primary">Export .wb</button>
       <button id="download-grid" class="ghost">Export .grid</button>
+      <button id="open-aspect-export" class="ghost" title="Export ASPECT initial temperature and composition fields">Export ASPECT</button>
       <details class="export-menu">
         <summary>Export geometry</summary>
         <div class="export-menu-content">
@@ -557,6 +558,21 @@
           <label class="checkbox-row"><input id="tomography-show-iso" type="checkbox" checked> Show editable iso-boundary preview</label>
           <button id="tomography-create-feature" class="wide ghost" disabled>Create editable feature from largest iso-region</button>
           <p id="tomography-iso-status" class="shape-help">Load a numerical grid to extract anomaly geometry.</p>
+          <details class="tomography-catalog-panel tomography-temperature-panel">
+            <summary>Convert tomography to temperature <span>ASPECT method</span></summary>
+            <p class="shape-help">Linear S40RTS-style scaling: δT = −(ξ/α) δlnVs. Positive velocity anomalies become colder.</p>
+            <div class="form-grid">
+              <label>Reference T (K)<input id="tomo-temp-reference" type="number" min="1" step="10" value="1600"></label>
+              <label>Vs → density ξ<input id="tomo-temp-xi" type="number" min="0" max="2" step="0.01" value="0.25"></label>
+              <label>Thermal α (K⁻¹)<input id="tomo-temp-alpha" type="number" min="0.000001" step="0.000001" value="0.00002"></label>
+              <label>Max |δT| (K)<input id="tomo-temp-clip" type="number" min="0" step="50" value="1200"></label>
+              <label>Apply below depth (km)<input id="tomo-temp-cutoff" type="number" min="0" step="10" value="0"></label>
+            </div>
+            <label class="checkbox-row"><input id="tomo-temp-remove-mean" type="checkbox" checked> Remove lateral mean velocity anomaly</label>
+            <button id="convert-tomography-temperature" class="wide primary" disabled>Convert loaded slice to temperature</button>
+            <div class="layer-actions"><button id="export-tomography-temperature" class="ghost" disabled>Export temperature ASCII</button></div>
+            <p id="tomo-temp-status" class="shape-help">Load a numerical tomography slice first.</p>
+          </details>
           <div class="layer-actions">
             <button id="export-tomography-csv" class="ghost" disabled>Export CSV values</button>
             <button id="clear-tomography" class="ghost" disabled>Clear grid</button>
@@ -1190,6 +1206,33 @@
     </div>
   </dialog>
 
+  <dialog id="aspect-export-dialog" class="examples-dialog aspect-export-dialog">
+    <div class="dialog-header">
+      <div><small>ASPECT INITIAL CONDITIONS</small><h2>Export structured ASCII fields</h2></div>
+      <button id="close-aspect-export" class="ghost">Close</button>
+    </div>
+    <div class="aspect-export-body">
+      <p>Generate sorted ASCII tables for ASPECT’s <strong>ascii data</strong> initial temperature and composition plugins, or export editable composition contours.</p>
+      <div class="form-grid">
+        <label>Dimension<select id="aspect-export-dimension"><option value="2">2D section</option><option value="3">3D volume</option></select></label>
+        <label>Samples X<input id="aspect-export-nx" type="number" min="2" max="501" value="81"></label>
+        <label class="aspect-export-ny-row">Samples Y<input id="aspect-export-ny" type="number" min="2" max="501" value="49"></label>
+        <label>Samples depth<input id="aspect-export-nz" type="number" min="2" max="501" value="41"></label>
+        <label class="aspect-export-section-row">Section Y<input id="aspect-export-section-y" type="number" step="any" value="0"></label>
+      </div>
+      <div class="aspect-export-checks">
+        <label class="checkbox-row"><input id="aspect-export-temperature" type="checkbox" checked> Temperature field</label>
+        <label class="checkbox-row"><input id="aspect-export-composition" type="checkbox" checked> One-hot composition fields</label>
+      </div>
+      <p id="aspect-export-summary" class="shape-help"></p>
+      <div class="layer-actions">
+        <button id="download-aspect-ascii" class="primary">Export selected ASPECT files</button>
+        <button id="download-aspect-contours" class="ghost">Export composition contours</button>
+      </div>
+      <p class="shape-help">Cartesian coordinates are metres. Spherical output uses ASPECT’s r, phi, theta convention in metres and radians. The first coordinate varies fastest.</p>
+    </div>
+  </dialog>
+
   <div id="workspace-dock" class="workspace-dock hidden" aria-label="Minimized workspaces" aria-hidden="true">
     <button id="restore-gravity-workspace" class="workspace-dock-item" title="Reopen the gravity results workspace" hidden>
       <span class="workspace-dock-grip" aria-hidden="true"></span>
@@ -1283,6 +1326,6 @@
   </div>
 
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="app.js?v=85"></script>
+  <script type="module" src="app.js?v=86"></script>
 </body>
 </html>

@@ -13,6 +13,8 @@ import { PLANETARY_BODY_CATALOG, searchPlanetaryBodies, planetaryBodyById } from
 import { gwbRuntime } from "./gwb-runtime.mjs";
 import { solveSteadyConduction, solveTransientConduction } from "./thermal-conduction.mjs";
 import { pairedStatistics, moransI, pointPatternMisfit } from "./spatial-statistics.mjs";
+import { convertTomographyToTemperature, ASPECT_TOMOGRAPHY_DEFAULTS } from "./tomography-temperature.mjs";
+import { buildAspectAscii, buildAspectCompositionContours } from "./aspect-ascii.mjs";
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
 const COLOR_MAP_VERSION = 4;
@@ -50,7 +52,8 @@ const DEFAULT_THERMAL_CONDUCTION = {
 const DEFAULT_TOMOGRAPHY = {
   visible: true, opacity: 76, grid: null, sourceMode: null,
   scalarField: "dvs", vpVsRatio: 1.8, isoValue: 0.5, isoMode: "above",
-  showIso: true, isoThicknessKm: 100
+  showIso: true, isoThicknessKm: 100, temperatureGrid: null,
+  temperatureConversion: { ...ASPECT_TOMOGRAPHY_DEFAULTS }
 };
 const DEFAULT_LITHOSPHERE = {
   visible: true, opacity: 72, grid: null, selectedModelId: null, sourceName: null
@@ -2640,7 +2643,8 @@ function drawTomographyIso(project = worldToCanvas) {
 }
 
 function drawTomographyGrid() {
-  const grid = state.tomography?.grid;
+  const temperatureMode = state.appearance.renderMode === "temperature" && state.tomography?.temperatureGrid?.values?.length;
+  const grid = temperatureMode ? state.tomography.temperatureGrid : state.tomography?.grid;
   if (!sceneLayerVisible("tomography") || state.tomography?.visible === false || !grid?.values?.length) return;
   const opacity = Number(state.tomography.opacity ?? ensureColorMaps().tomography.opacity) / 100;
   const dx = (grid.east - grid.west) / Math.max(1, grid.nx - 1);
@@ -2655,17 +2659,19 @@ function drawTomographyGrid() {
       const east = west + dx;
       const a = worldToCanvas([west, north]);
       const b = worldToCanvas([east, south]);
-      const [minimum, maximum] = tomographyScalarRange(grid);
-      context.fillStyle = `rgb(${scalarRgb("tomography", tomographyScalarValue(tomographyCell(grid, column, row)), minimum, maximum).join(",")})`;
+      const [minimum, maximum] = temperatureMode ? [grid.min, grid.max] : tomographyScalarRange(grid);
+      const scalar = temperatureMode ? Number(tomographyCell(grid, column, row)) : tomographyScalarValue(tomographyCell(grid, column, row));
+      context.fillStyle = `rgb(${scalarRgb(temperatureMode ? "temperature" : "tomography", scalar, minimum, maximum).join(",")})`;
       context.fillRect(Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(b[0] - a[0]) + .7, Math.abs(b[1] - a[1]) + .7);
     }
   }
   context.restore();
-  drawTomographyIso();
+  if (!temperatureMode) drawTomographyIso();
 }
 
 function drawTomographyLegend(width, height) {
   const grid = state.tomography?.grid;
+  if (state.appearance.renderMode === "temperature" && state.tomography?.temperatureGrid?.values?.length) return;
   if (!sceneLayerVisible("legend") || !sceneLayerVisible("tomography") || !grid?.values?.length || viewMode === "section") return;
   const map = ensureColorMaps().tomography;
   const legendWidth = Math.min(180, width - 40);
@@ -6298,6 +6304,10 @@ function buildWbText() {
   }
   if (state.tomography?.grid) {
     notes.push(`Tomography overlay: ${state.tomography.grid.model} at ${state.tomography.grid.depth} km (${state.tomography.scalarField}).`);
+    if (state.tomography.temperatureGrid?.values?.length) {
+      const conversion = state.tomography.temperatureConversion || ASPECT_TOMOGRAPHY_DEFAULTS;
+      notes.push(`Tomography-derived temperature preview: delta_T = -(xi/alpha) delta_ln_Vs, xi=${conversion.vsToDensity}, alpha=${conversion.thermalExpansion} K^-1, reference T=${conversion.referenceTemperature} K. This sampled preview is exported separately, not embedded as a World Builder feature.`);
+    }
   } else if (state.tomography?.sourceMode === "image-fallback") {
     notes.push("A rendered tomography depth slice was used as visual drawing context; its raster is not embedded in this .wb file.");
   }
@@ -6921,6 +6931,7 @@ function applyLithosphereField() {
 
 function syncTomographyUI() {
   state.tomography = { ...DEFAULT_TOMOGRAPHY, ...(state.tomography || {}) };
+  state.tomography.temperatureConversion = { ...ASPECT_TOMOGRAPHY_DEFAULTS, ...(state.tomography.temperatureConversion || {}) };
   const values = {
     "tomography-opacity": state.tomography.opacity,
     "tomography-scalar-field": state.tomography.scalarField,
@@ -6936,8 +6947,80 @@ function syncTomographyUI() {
   document.querySelector("#export-tomography-csv").disabled = !hasGrid;
   document.querySelector("#clear-tomography").disabled = !hasGrid && !hasFallback;
   document.querySelector("#tomography-create-feature").disabled = !hasGrid;
+  document.querySelector("#convert-tomography-temperature").disabled = !hasGrid;
+  document.querySelector("#export-tomography-temperature").disabled = !state.tomography.temperatureGrid?.values?.length;
+  const conversion = state.tomography.temperatureConversion;
+  const temperatureValues = {
+    "tomo-temp-reference": conversion.referenceTemperature,
+    "tomo-temp-xi": conversion.vsToDensity,
+    "tomo-temp-alpha": conversion.thermalExpansion,
+    "tomo-temp-clip": conversion.maxAbsAnomaly,
+    "tomo-temp-cutoff": conversion.shallowCutoffKm
+  };
+  Object.entries(temperatureValues).forEach(([id, value]) => { const input = document.querySelector(`#${id}`); if (input && document.activeElement !== input) input.value = value; });
+  document.querySelector("#tomo-temp-remove-mean").checked = conversion.removeMean !== false;
+  const temperatureGrid = state.tomography.temperatureGrid;
+  document.querySelector("#tomo-temp-status").textContent = temperatureGrid?.values?.length
+    ? `${temperatureGrid.min.toFixed(0)}–${temperatureGrid.max.toFixed(0)} K · ${temperatureGrid.model} · ${temperatureGrid.depth} km`
+    : "Load a numerical tomography slice first.";
   updateTomographyIsoStatus();
   renderTomographyCatalog();
+}
+
+function tomographyTemperatureConfigFromUI() {
+  return {
+    sourceField: state.tomography.scalarField,
+    dvsDvpRatio: Number(state.tomography.vpVsRatio),
+    referenceTemperature: Number(document.querySelector("#tomo-temp-reference").value),
+    vsToDensity: Number(document.querySelector("#tomo-temp-xi").value),
+    thermalExpansion: Number(document.querySelector("#tomo-temp-alpha").value),
+    maxAbsAnomaly: Number(document.querySelector("#tomo-temp-clip").value),
+    shallowCutoffKm: Number(document.querySelector("#tomo-temp-cutoff").value),
+    removeMean: document.querySelector("#tomo-temp-remove-mean").checked
+  };
+}
+
+function convertLoadedTomographyTemperature() {
+  const grid = state.tomography?.grid;
+  if (!grid?.values?.length) return showToast("Load a numerical tomography grid first");
+  try {
+    const config = tomographyTemperatureConfigFromUI();
+    const sourceValues = grid.values.map(value => config.sourceField === "dvp" ? Number(value) / Math.max(.1, config.dvsDvpRatio) : Number(value));
+    const result = convertTomographyToTemperature(sourceValues, { ...config, depthKm: Number(grid.depth) });
+    state.tomography.temperatureConversion = config;
+    state.tomography.temperatureGrid = {
+      ...grid, values: result.temperature, anomalies: result.anomaly,
+      min: result.min, max: result.max, unit: "K", model: `${grid.model} → temperature`,
+      provenance: { formula: result.formula, ...config }
+    };
+    ensureColorMaps().temperature.min = Math.floor(result.min);
+    ensureColorMaps().temperature.max = Math.ceil(result.max);
+    state.appearance.renderMode = "temperature";
+    persist(); syncTomographyUI(); draw();
+    showToast("Tomography converted to a temperature preview");
+  } catch (error) {
+    document.querySelector("#tomo-temp-status").textContent = error.message;
+  }
+}
+
+function exportTomographyTemperatureAscii() {
+  const grid = state.tomography?.temperatureGrid;
+  if (!grid?.values?.length) return;
+  const rows = [
+    "# Tomography-derived temperature generated by GWB Visual Builder",
+    `# Method: ${grid.provenance?.formula || "delta_T = -(xi/alpha) * delta_ln_Vs"}`,
+    `# POINTS: ${grid.nx} ${grid.ny}`,
+    "# longitude_deg latitude_deg depth_km temperature_K delta_temperature_K"
+  ];
+  for (let row = 0; row < grid.ny; row++) {
+    const latitude = grid.north - row / Math.max(1, grid.ny - 1) * (grid.north - grid.south);
+    for (let column = 0; column < grid.nx; column++) {
+      const index = row * grid.nx + column;
+      const longitude = grid.west + column / Math.max(1, grid.nx - 1) * (grid.east - grid.west);
+      rows.push([longitude, latitude, grid.depth, grid.values[index], grid.anomalies[index]].map(value => Number(value).toPrecision(10)).join(" "));
+    }
+  }
+  download(`tomography-temperature-${grid.depth}km.txt`, `${rows.join("\n")}\n`, "text/plain");
 }
 
 function tomographyIsoMask() {
@@ -7104,7 +7187,7 @@ async function loadTomographySlice() {
       addTomographyReference(values.model);
       state.tomography = {
         ...DEFAULT_TOMOGRAPHY, ...(state.tomography || {}), grid, sourceMode: "numerical",
-        opacity: Number(document.querySelector("#tomography-opacity").value)
+        opacity: Number(document.querySelector("#tomography-opacity").value), temperatureGrid: null
       };
       const map = ensureColorMaps().tomography;
       const fieldRange = state.tomography.scalarField === "dvp"
@@ -9372,6 +9455,16 @@ document.querySelector("#tomography-show-iso").addEventListener("change", event 
   draw();
 });
 document.querySelector("#tomography-create-feature").addEventListener("click", createFeatureFromTomographyIso);
+document.querySelector("#convert-tomography-temperature").addEventListener("click", convertLoadedTomographyTemperature);
+document.querySelector("#export-tomography-temperature").addEventListener("click", exportTomographyTemperatureAscii);
+["tomo-temp-reference", "tomo-temp-xi", "tomo-temp-alpha", "tomo-temp-clip", "tomo-temp-cutoff"].forEach(id => document.querySelector(`#${id}`).addEventListener("input", () => {
+  state.tomography.temperatureConversion = tomographyTemperatureConfigFromUI();
+  persist();
+}));
+document.querySelector("#tomo-temp-remove-mean").addEventListener("change", () => {
+  state.tomography.temperatureConversion = tomographyTemperatureConfigFromUI();
+  persist();
+});
 document.querySelector("#choose-reference-image").addEventListener("click", () => document.querySelector("#reference-image-file").click());
 document.querySelector("#reference-image-file").addEventListener("change", event => {
   const file = event.target.files?.[0];
@@ -9477,6 +9570,50 @@ document.querySelectorAll("[data-output]").forEach(button => button.addEventList
 
 document.querySelector("#download-wb").addEventListener("click", () => download("world-builder-model.wb", buildWbText(), "application/json"));
 document.querySelector("#download-grid").addEventListener("click", () => download("world-builder-model.grid", buildGrid(state.settings), "text/plain"));
+function syncAspectExportDialog() {
+  const dimension = Number(document.querySelector("#aspect-export-dimension").value);
+  document.querySelector(".aspect-export-ny-row").classList.toggle("hidden", dimension !== 3);
+  document.querySelector(".aspect-export-section-row").classList.toggle("hidden", dimension === 3);
+  const nx = Math.max(2, Number(document.querySelector("#aspect-export-nx").value));
+  const ny = dimension === 3 ? Math.max(2, Number(document.querySelector("#aspect-export-ny").value)) : 1;
+  const nz = Math.max(2, Number(document.querySelector("#aspect-export-nz").value));
+  document.querySelector("#aspect-export-summary").textContent = `${(nx * ny * nz).toLocaleString()} sample points · ${state.settings.compositions} composition field${Number(state.settings.compositions) === 1 ? "" : "s"} · ${state.settings.coordinateSystem} coordinates`;
+}
+document.querySelector("#open-aspect-export").addEventListener("click", () => {
+  const dialog = document.querySelector("#aspect-export-dialog");
+  document.querySelector("#aspect-export-dimension").value = String(Number(state.settings.dimension) === 3 ? 3 : 2);
+  document.querySelector("#aspect-export-nx").value = Math.min(501, Number(state.settings.cellsX) + 1);
+  document.querySelector("#aspect-export-ny").value = Math.min(501, Number(state.settings.cellsY) + 1);
+  document.querySelector("#aspect-export-nz").value = Math.min(501, Number(state.settings.cellsZ) + 1);
+  document.querySelector("#aspect-export-section-y").value = (Number(state.settings.yMin) + Number(state.settings.yMax)) / 2;
+  syncAspectExportDialog(); dialog.showModal();
+});
+document.querySelector("#close-aspect-export").addEventListener("click", () => document.querySelector("#aspect-export-dialog").close());
+["aspect-export-dimension", "aspect-export-nx", "aspect-export-ny", "aspect-export-nz"].forEach(id => document.querySelector(`#${id}`).addEventListener("input", syncAspectExportDialog));
+document.querySelector("#download-aspect-ascii").addEventListener("click", () => {
+  const options = {
+    dimension: Number(document.querySelector("#aspect-export-dimension").value),
+    nx: Number(document.querySelector("#aspect-export-nx").value),
+    ny: Number(document.querySelector("#aspect-export-ny").value),
+    nz: Number(document.querySelector("#aspect-export-nz").value),
+    sectionY: Number(document.querySelector("#aspect-export-section-y").value),
+    temperature: document.querySelector("#aspect-export-temperature").checked,
+    composition: document.querySelector("#aspect-export-composition").checked
+  };
+  if (!options.temperature && !options.composition) return showToast("Select temperature, composition, or both");
+  try {
+    if (options.temperature) download(`aspect-initial-temperature-${options.dimension}d.txt`, buildAspectAscii(state.settings, state.features, { ...options, temperature: true, composition: false }), "text/plain");
+    if (options.composition) download(`aspect-initial-composition-${options.dimension}d.txt`, buildAspectAscii(state.settings, state.features, { ...options, temperature: false, composition: true }), "text/plain");
+    showToast(`ASPECT ${options.dimension}D structured field${options.temperature && options.composition ? "s" : ""} exported`);
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+document.querySelector("#download-aspect-contours").addEventListener("click", () => {
+  if (!state.features.length) return showToast("Add or import features before exporting contours");
+  download("aspect-composition-contours.txt", buildAspectCompositionContours(state.features), "text/plain");
+  showToast("Composition layer contours exported");
+});
 const geometryExports = {
   vtp: {
     name: "world-builder-model.vtp", mime: "application/vnd.vtk.vtp+xml", build: buildVtp,
