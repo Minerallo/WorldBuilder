@@ -559,8 +559,8 @@
           <button id="tomography-create-feature" class="wide ghost" disabled>Create editable feature from largest iso-region</button>
           <p id="tomography-iso-status" class="shape-help">Load a numerical grid to extract anomaly geometry.</p>
           <details class="tomography-catalog-panel tomography-temperature-panel">
-            <summary>Convert tomography to temperature <span>ASPECT method</span></summary>
-            <p class="shape-help">Linear S40RTS-style scaling: δT = −(ξ/α) δlnVs. Positive velocity anomalies become colder.</p>
+            <summary>Convert tomography to temperature <span>Velocity–temperature scaling</span></summary>
+            <p class="shape-help">Linear scaling: δT = −(ξ/α) δlnVs. Positive velocity anomalies become colder.</p>
             <div class="form-grid">
               <label>Reference T (K)<input id="tomo-temp-reference" type="number" min="1" step="10" value="1600"></label>
               <label>Vs → density ξ<input id="tomo-temp-xi" type="number" min="0" max="2" step="0.01" value="0.25"></label>
