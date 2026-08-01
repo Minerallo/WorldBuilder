@@ -87,7 +87,8 @@ export function buildAspectAscii(settings, features, options = {}) {
   };
   // ASPECT requires the first output coordinate to ascend fastest.
   if (settings.coordinateSystem === "spherical") {
-    for (const y of ys) for (const x of xs) for (const depth of depths) write(x, y, depth);
+    // Latitude must descend so ASPECT's polar angle theta ascends.
+    for (const y of [...ys].reverse()) for (const x of xs) for (const depth of depths) write(x, y, depth);
   } else {
     for (const depth of depths) for (const y of ys) for (const x of xs) write(x, y, depth);
   }
