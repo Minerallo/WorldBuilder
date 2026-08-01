@@ -570,6 +570,12 @@
             </div>
             <label class="checkbox-row"><input id="tomo-temp-remove-mean" type="checkbox" checked> Remove lateral mean velocity anomaly</label>
             <button id="convert-tomography-temperature" class="wide primary" disabled>Convert loaded slice to temperature</button>
+            <label>Display on map
+              <select id="tomo-display-field">
+                <option value="velocity">Velocity anomaly · dVs/dVp</option>
+                <option value="temperature" disabled>Converted temperature · K</option>
+              </select>
+            </label>
             <div class="layer-actions"><button id="export-tomography-temperature" class="ghost" disabled>Export temperature ASCII</button></div>
             <p id="tomo-temp-status" class="shape-help">Load a numerical tomography slice first.</p>
           </details>

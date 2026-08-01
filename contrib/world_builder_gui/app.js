@@ -52,7 +52,7 @@ const DEFAULT_THERMAL_CONDUCTION = {
 const DEFAULT_TOMOGRAPHY = {
   visible: true, opacity: 76, grid: null, sourceMode: null,
   scalarField: "dvs", vpVsRatio: 1.8, isoValue: 0.5, isoMode: "above",
-  showIso: true, isoThicknessKm: 100, temperatureGrid: null,
+  showIso: true, isoThicknessKm: 100, temperatureGrid: null, displayField: "velocity",
   temperatureConversion: { ...ASPECT_TOMOGRAPHY_DEFAULTS }
 };
 const DEFAULT_LITHOSPHERE = {
@@ -954,7 +954,10 @@ function featureFill(feature, points, alpha = .34) {
 
 function drawTemperatureLegend(width, height) {
   const computedThermalVisible = sceneLayerVisible("computedThermal") && computedModel?.result?.temperature?.length;
-  if (!sceneLayerVisible("legend") || (state.appearance.renderMode !== "temperature" && !computedThermalVisible)) return;
+  const tomographyTemperatureVisible = state.tomography?.displayField === "temperature" && state.tomography?.temperatureGrid?.values?.length;
+  const featureTemperatureVisible = state.appearance.renderMode === "temperature" && state.features.some(featureVisible);
+  if (tomographyTemperatureVisible) return;
+  if (!sceneLayerVisible("legend") || (!featureTemperatureVisible && !computedThermalVisible)) return;
   const x = Math.max(64, width - 220); const y = height - 44; const legendWidth = 180;
   const gradient = context.createLinearGradient(x, 0, x + legendWidth, 0);
   [[0, 273], [.2, 550], [.4, 850], [.6, 1150], [.78, 1450], [.92, 1700], [1, 1800]].forEach(([stop]) => {
@@ -1008,7 +1011,7 @@ function drawTopographyLegend(width, height) {
   const maximum = Math.max(...topography.values);
   const legendWidth = Math.min(180, width - 40);
   const x = 20;
-  const temperatureVisible = state.appearance.renderMode === "temperature"
+  const temperatureVisible = (state.appearance.renderMode === "temperature" && state.features.some(featureVisible))
     || (sceneLayerVisible("computedThermal") && computedModel?.result?.temperature?.length);
   const y = height - (temperatureVisible ? 92 : 44);
   const gradient = context.createLinearGradient(x, 0, x + legendWidth, 0);
@@ -2643,7 +2646,7 @@ function drawTomographyIso(project = worldToCanvas) {
 }
 
 function drawTomographyGrid() {
-  const temperatureMode = state.appearance.renderMode === "temperature" && state.tomography?.temperatureGrid?.values?.length;
+  const temperatureMode = state.tomography?.displayField === "temperature" && state.tomography?.temperatureGrid?.values?.length;
   const grid = temperatureMode ? state.tomography.temperatureGrid : state.tomography?.grid;
   if (!sceneLayerVisible("tomography") || state.tomography?.visible === false || !grid?.values?.length) return;
   const opacity = Number(state.tomography.opacity ?? ensureColorMaps().tomography.opacity) / 100;
@@ -2670,23 +2673,28 @@ function drawTomographyGrid() {
 }
 
 function drawTomographyLegend(width, height) {
-  const grid = state.tomography?.grid;
-  if (state.appearance.renderMode === "temperature" && state.tomography?.temperatureGrid?.values?.length) return;
+  const temperatureMode = state.tomography?.displayField === "temperature" && state.tomography?.temperatureGrid?.values?.length;
+  const grid = temperatureMode ? state.tomography.temperatureGrid : state.tomography?.grid;
   if (!sceneLayerVisible("legend") || !sceneLayerVisible("tomography") || !grid?.values?.length || viewMode === "section") return;
-  const map = ensureColorMaps().tomography;
+  const map = ensureColorMaps()[temperatureMode ? "temperature" : "tomography"];
   const legendWidth = Math.min(180, width - 40);
   const x = 20; const y = 44;
   const gradient = context.createLinearGradient(x, 0, x + legendWidth, 0);
-  colorMapStops("tomography").forEach((color, index, colors) => gradient.addColorStop(index / Math.max(1, colors.length - 1), color));
+  colorMapStops(temperatureMode ? "temperature" : "tomography").forEach((color, index, colors) => gradient.addColorStop(index / Math.max(1, colors.length - 1), color));
   context.save();
   context.fillStyle = "rgba(5,10,13,.76)"; context.fillRect(x - 10, y - 24, legendWidth + 20, 48);
   context.fillStyle = "#edf3f0"; context.font = "700 8px ui-monospace";
-  context.fillText(`${grid.model.replace("model_", "").toUpperCase()} · ${grid.depth} KM · ${tomographyScalarLabel()}`, x, y - 11);
+  const title = temperatureMode
+    ? `${String(state.tomography.grid?.model || "TOMOGRAPHY").replace("model_", "").toUpperCase()} → TEMPERATURE · ${grid.depth} KM`
+    : `${grid.model.replace("model_", "").toUpperCase()} · ${grid.depth} KM · ${tomographyScalarLabel()}`;
+  context.fillText(title, x, y - 11);
   context.fillStyle = gradient; context.fillRect(x, y, legendWidth, 9);
   context.strokeStyle = "#96a7ad"; context.strokeRect(x, y, legendWidth, 9);
   context.font = "9px ui-monospace"; context.fillStyle = "#edf3f0";
-  context.fillText(Number(map.min).toFixed(2), x, y + 20);
-  const maxLabel = Number(map.max).toFixed(2);
+  const minimum = temperatureMode ? Number(grid.min) : Number(map.min);
+  const maximum = temperatureMode ? Number(grid.max) : Number(map.max);
+  context.fillText(`${minimum.toFixed(temperatureMode ? 0 : 2)}${temperatureMode ? " K" : ""}`, x, y + 20);
+  const maxLabel = `${maximum.toFixed(temperatureMode ? 0 : 2)}${temperatureMode ? " K" : ""}`;
   context.fillText(maxLabel, x + legendWidth - context.measureText(maxLabel).width, y + 20);
   context.restore();
 }
@@ -6948,7 +6956,12 @@ function syncTomographyUI() {
   document.querySelector("#clear-tomography").disabled = !hasGrid && !hasFallback;
   document.querySelector("#tomography-create-feature").disabled = !hasGrid;
   document.querySelector("#convert-tomography-temperature").disabled = !hasGrid;
+  document.querySelector("#convert-tomography-temperature").textContent = state.tomography.temperatureGrid?.values?.length ? "Recompute converted temperature" : "Convert loaded slice to temperature";
   document.querySelector("#export-tomography-temperature").disabled = !state.tomography.temperatureGrid?.values?.length;
+  const displaySelect = document.querySelector("#tomo-display-field");
+  displaySelect.querySelector('option[value="temperature"]').disabled = !state.tomography.temperatureGrid?.values?.length;
+  if (!state.tomography.temperatureGrid?.values?.length) state.tomography.displayField = "velocity";
+  displaySelect.value = state.tomography.displayField;
   const conversion = state.tomography.temperatureConversion;
   const temperatureValues = {
     "tomo-temp-reference": conversion.referenceTemperature,
@@ -6961,8 +6974,8 @@ function syncTomographyUI() {
   document.querySelector("#tomo-temp-remove-mean").checked = conversion.removeMean !== false;
   const temperatureGrid = state.tomography.temperatureGrid;
   document.querySelector("#tomo-temp-status").textContent = temperatureGrid?.values?.length
-    ? `${temperatureGrid.min.toFixed(0)}–${temperatureGrid.max.toFixed(0)} K · ${temperatureGrid.model} · ${temperatureGrid.depth} km`
-    : "Load a numerical tomography slice first.";
+    ? `✓ Converted · ${temperatureGrid.min.toFixed(0)}–${temperatureGrid.max.toFixed(0)} K · displayed as ${state.tomography.displayField === "temperature" ? "temperature" : "velocity anomaly"}`
+    : hasGrid ? "Numerical grid ready. Click Convert loaded slice to temperature." : "Load a numerical tomography slice first.";
   updateTomographyIsoStatus();
   renderTomographyCatalog();
 }
@@ -6993,9 +7006,9 @@ function convertLoadedTomographyTemperature() {
       min: result.min, max: result.max, unit: "K", model: `${grid.model} → temperature`,
       provenance: { formula: result.formula, ...config }
     };
+    state.tomography.displayField = "temperature";
     ensureColorMaps().temperature.min = Math.floor(result.min);
     ensureColorMaps().temperature.max = Math.ceil(result.max);
-    state.appearance.renderMode = "temperature";
     persist(); syncTomographyUI(); draw();
     showToast("Tomography converted to a temperature preview");
   } catch (error) {
@@ -7200,6 +7213,7 @@ async function loadTomographySlice() {
       document.querySelector("#export-tomography-csv").disabled = false;
       document.querySelector("#clear-tomography").disabled = false;
       document.querySelector("#tomography-create-feature").disabled = false;
+      syncTomographyUI();
       updateTomographyIsoStatus();
       setTomographyStatus(
         `Numerical ${grid.nx}×${grid.ny} ${grid.unit} grid loaded at ${grid.depth} km · values ${grid.min.toFixed(3)} to ${grid.max.toFixed(3)}%.`,
@@ -9411,9 +9425,7 @@ document.querySelector("#clear-tomography").addEventListener("click", () => {
     state.background = null;
     referenceImage = null;
   }
-  document.querySelector("#export-tomography-csv").disabled = true;
-  document.querySelector("#clear-tomography").disabled = true;
-  document.querySelector("#tomography-create-feature").disabled = true;
+  syncTomographyUI();
   setTomographyStatus("Tomography overlay cleared.", "success");
   updateTomographyIsoStatus();
   updateAll(false);
@@ -9439,11 +9451,14 @@ document.querySelector("#tomography-opacity").addEventListener("input", event =>
       [keys[id]]: numeric ? Number(event.target.value) : event.target.value
     };
     if (id === "tomography-scalar-field" || id === "tomography-vpvs-ratio") {
+      state.tomography.temperatureGrid = null;
+      state.tomography.displayField = "velocity";
       const range = Math.abs(Number(document.querySelector("#tomography-range").value) || 1)
         / (state.tomography.scalarField === "dvp" ? Math.max(.1, Number(state.tomography.vpVsRatio)) : 1);
       const map = ensureColorMaps().tomography;
       map.min = -range; map.max = range;
       if (document.querySelector("#color-field").value === "tomography") syncColorEditor();
+      syncTomographyUI();
     }
     updateTomographyIsoStatus();
     persist();
@@ -9457,6 +9472,11 @@ document.querySelector("#tomography-show-iso").addEventListener("change", event 
 document.querySelector("#tomography-create-feature").addEventListener("click", createFeatureFromTomographyIso);
 document.querySelector("#convert-tomography-temperature").addEventListener("click", convertLoadedTomographyTemperature);
 document.querySelector("#export-tomography-temperature").addEventListener("click", exportTomographyTemperatureAscii);
+document.querySelector("#tomo-display-field").addEventListener("change", event => {
+  if (event.target.value === "temperature" && !state.tomography.temperatureGrid?.values?.length) return;
+  state.tomography.displayField = event.target.value;
+  persist(); syncTomographyUI(); draw();
+});
 ["tomo-temp-reference", "tomo-temp-xi", "tomo-temp-alpha", "tomo-temp-clip", "tomo-temp-cutoff"].forEach(id => document.querySelector(`#${id}`).addEventListener("input", () => {
   state.tomography.temperatureConversion = tomographyTemperatureConfigFromUI();
   persist();
