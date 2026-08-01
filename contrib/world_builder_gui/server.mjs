@@ -17,7 +17,9 @@ const mime = {
   ".mjs": "text/javascript; charset=utf-8",
   ".wasm": "application/wasm",
   ".json": "application/json; charset=utf-8",
-  ".png": "image/png"
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg"
 };
 const gplatesModels = {
   MULLER2022: [0, 1000], ZAHIROVIC2022: [0, 410], MERDITH2021: [0, 1000],

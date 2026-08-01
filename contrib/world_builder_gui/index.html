@@ -14,13 +14,16 @@
       <div><strong>Visual Builder</strong><small>Geodynamic World Builder</small><span id="gwb-version-badge" class="version-badge" title="Reading the World Builder source version">GWB 1.2</span></div>
     </div>
     <div class="top-actions">
-      <nav class="project-links" aria-label="GWB project links">
-        <a href="https://gwb.readthedocs.io/" target="_blank" rel="noreferrer" title="Open the GWB manual">Manual ↗</a>
-        <a href="https://github.com/GeodynamicWorldBuilder/WorldBuilder/" target="_blank" rel="noreferrer" title="Open the GWB source repository">GitHub ↗</a>
-        <a href="https://geodynamicworldbuilder.github.io/" target="_blank" rel="noreferrer" title="Learn what the Geodynamic World Builder is">About GWB ↗</a>
-        <a href="https://matrix.to/#/!vhukRUGUINnZOIutoQ:matrix.org?via=matrix.org" target="_blank" rel="noreferrer" title="Join the GWB community on Element / Matrix">Element chat ↗</a>
-        <a href="https://chatgpt.com/g/g-697288e8f6d08191802a41c65fca2cb9-aspect-software-guide" target="_blank" rel="noreferrer" title="Ask the ASPECT Software Guide GPT about ASPECT and integrated GWB workflows">ASPECT + GWB GPT ↗</a>
-      </nav>
+      <details class="topbar-menu">
+        <summary>Help &amp; community</summary>
+        <nav class="project-links" aria-label="GWB project links">
+          <a href="https://gwb.readthedocs.io/" target="_blank" rel="noreferrer" title="Open the GWB manual"><strong>Manual</strong><span>GWB concepts and parameters ↗</span></a>
+          <a href="https://github.com/GeodynamicWorldBuilder/WorldBuilder/" target="_blank" rel="noreferrer" title="Open the GWB source repository"><strong>GitHub</strong><span>Source, issues and contributions ↗</span></a>
+          <a href="https://geodynamicworldbuilder.github.io/" target="_blank" rel="noreferrer" title="Learn what the Geodynamic World Builder is"><strong>About GWB</strong><span>Project overview and community ↗</span></a>
+          <a href="https://matrix.to/#/!vhukRUGUINnZOIutoQ:matrix.org?via=matrix.org" target="_blank" rel="noreferrer" title="Join the GWB community on Element / Matrix"><strong>Element chat</strong><span>Ask the GWB community ↗</span></a>
+          <a href="https://chatgpt.com/g/g-697288e8f6d08191802a41c65fca2cb9-aspect-software-guide" target="_blank" rel="noreferrer" title="Ask the ASPECT Software Guide GPT about ASPECT and integrated GWB workflows"><strong>ASPECT + GWB GPT</strong><span>Interactive software guide ↗</span></a>
+        </nav>
+      </details>
       <span id="save-state" class="save-state">Saved locally</span>
       <div class="history-controls" aria-label="Edit history">
         <button id="undo-action" class="ghost" title="Previous model state (Ctrl/Cmd+Z)" aria-label="Previous model state" aria-keyshortcuts="Control+Z Meta+Z" disabled><span aria-hidden="true">←</span><span class="history-label">Previous</span></button>
@@ -296,18 +299,43 @@
           <button data-tool="section" title="Draw a depth section (S)" aria-keyshortcuts="S">Draw section</button>
         </div>
         <button id="toggle-shape-editor" class="icon-button" aria-expanded="false">Shape editor</button>
-        <details class="toolbar-menu">
-          <summary>Data</summary>
-          <div class="toolbar-menu-content">
-            <small>DATA &amp; RESEARCH</small>
-            <button id="toggle-map-editor" class="icon-button" aria-expanded="false">Reference map</button>
-            <button id="toggle-tomography" class="icon-button tomography-button" aria-expanded="false">Tomography</button>
-            <button id="toggle-lithosphere" class="icon-button lithosphere-button" aria-expanded="false">Lithosphere models</button>
-            <button id="toggle-planetary" class="icon-button planetary-button" aria-expanded="false">Planetary bodies</button>
-            <button id="toggle-gravity" class="icon-button gravity-button" aria-expanded="false">Gravity</button>
-            <button id="toggle-computation" class="icon-button compute-button" aria-expanded="false">Model computation</button>
-            <button id="toggle-field-calculator" class="icon-button calculator-button" aria-expanded="false">Field calculator</button>
-            <button id="toggle-research" class="icon-button research-button" aria-expanded="false">Research functions</button>
+        <details id="workspace-launcher" class="toolbar-menu workspace-launcher">
+          <summary title="Open a scientific workspace (W)" aria-keyshortcuts="W"><span aria-hidden="true">◫</span> Workspaces</summary>
+          <div class="toolbar-menu-content workspace-launcher-content">
+            <div class="workspace-launcher-heading">
+              <div><small>SCIENTIFIC MODULES</small><strong>Choose a workspace</strong></div>
+              <kbd>W</kbd>
+            </div>
+            <input id="workspace-search" class="workspace-search" type="search" placeholder="Search thermal, maps, gravity…" aria-label="Search workspaces">
+            <div id="workspace-launcher-empty" class="workspace-launcher-empty hidden">No workspace matches that search.</div>
+            <section class="workspace-launcher-group" data-workspace-group>
+              <header><span>Build &amp; data</span><small>Inputs and model context</small></header>
+              <div class="workspace-launcher-grid">
+                <button id="toggle-map-editor" class="workspace-card" aria-expanded="false" data-workspace-search="reference map image gis background"><span class="workspace-card-icon">▧</span><span><strong>Reference map</strong><small>Trace features over maps and imagery</small></span></button>
+                <button id="toggle-tomography" class="workspace-card tomography-button" aria-expanded="false" data-workspace-search="tomography dvs dvp isosurface seismic"><span class="workspace-card-icon">◉</span><span><strong>Tomography</strong><small>Explore numerical seismic models</small></span></button>
+                <button id="toggle-lithosphere" class="workspace-card lithosphere-button" aria-expanded="false" data-workspace-search="lithosphere crust litho1 earthscope data"><span class="workspace-card-icon">▤</span><span><strong>Lithosphere models</strong><small>Load crust and LAB data products</small></span></button>
+                <button id="toggle-planetary" class="workspace-card planetary-button" aria-expanded="false" data-workspace-search="planetary mars venus moon mercury bodies"><span class="workspace-card-icon">◌</span><span><strong>Planetary bodies</strong><small>Configure non-Earth domains and data</small></span></button>
+              </div>
+            </section>
+            <section class="workspace-launcher-group" data-workspace-group>
+              <header><span>Physics &amp; analysis</span><small>Compute and interpret</small></header>
+              <div class="workspace-launcher-grid">
+                <button id="toggle-thermal-conduction" class="workspace-card thermal-conduction-button" aria-expanded="false" data-workspace-search="thermal conduction temperature heat geotherm"><span class="workspace-card-icon thermal">♨</span><span><strong>Thermal conduction</strong><small>Steady and transient temperature</small></span><em>NEW</em></button>
+                <button id="toggle-gravity" class="workspace-card gravity-button" aria-expanded="false" data-workspace-search="gravity bouguer free air tensor density"><span class="workspace-card-icon gravity">g</span><span><strong>Gravity</strong><small>Anomalies, sections and contours</small></span></button>
+                <button id="toggle-stress" class="workspace-card stress-button" aria-expanded="false" data-workspace-search="stress dykes vents magma elastic"><span class="workspace-card-icon stress">σ</span><span><strong>Stress &amp; dykes</strong><small>Stress fields and path comparison</small></span></button>
+                <button id="toggle-statistics" class="workspace-card statistics-button" aria-expanded="false" data-workspace-search="statistics validation spatial correlation moran misfit rmse pearson vents"><span class="workspace-card-icon statistics">Σ</span><span><strong>Statistics &amp; validation</strong><small>Spatial correlation and model misfit</small></span><em>NEW</em></button>
+                <button id="toggle-computation" class="workspace-card compute-button" aria-expanded="false" data-workspace-search="model computation wasm isostasy thermal state"><span class="workspace-card-icon">▶</span><span><strong>Model computation</strong><small>Run WebAssembly model operations</small></span></button>
+                <button class="workspace-card workspace-card-planned" disabled data-workspace-search="surface processes erosion deposition landlab fastscape uplift rivers"><span class="workspace-card-icon">⌁</span><span><strong>Surface processes</strong><small>Erosion, drainage and deposition</small></span><em>PLANNED</em></button>
+              </div>
+            </section>
+            <section class="workspace-launcher-group" data-workspace-group>
+              <header><span>Utilities</span><small>Inspect, derive and learn</small></header>
+              <div class="workspace-launcher-grid">
+                <button id="toggle-field-calculator" class="workspace-card calculator-button" aria-expanded="false" data-workspace-search="field calculator gradient plus minus layers"><span class="workspace-card-icon">ƒ</span><span><strong>Field calculator</strong><small>Combine and derive numerical fields</small></span></button>
+                <button id="toggle-research" class="workspace-card research-button" aria-expanded="false" data-workspace-search="research search manual examples functions"><span class="workspace-card-icon">?</span><span><strong>Research functions</strong><small>Search tools, examples and the manual</small></span></button>
+              </div>
+            </section>
+            <footer><span>Tip: press <kbd>W</kbd> anywhere to open this launcher.</span><a href="https://gwb.readthedocs.io/" target="_blank" rel="noreferrer">GWB manual ↗</a></footer>
           </div>
         </details>
         <details class="toolbar-menu">
@@ -735,6 +763,55 @@
           <a class="tomography-link" href="https://juliageodynamics.github.io/GeophysicalModelGenerator.jl/dev/man/gravity_code/" target="_blank" rel="noreferrer">GMG voxel_grav documentation ↗</a>
           <p class="shape-help">The browser uses a responsive infinite-slab preview and recomputes after model edits. It is not a replacement for GMG’s full 3D voxel integration; export to a future Julia backend will provide publication-grade anomalies and gradients.</p>
         </aside>
+        <aside id="stress-editor" class="map-editor stress-editor hidden" aria-label="Stress and dyke modelling">
+          <div class="shape-editor-header">
+            <div><small>SAM-INSPIRED · GIS COMPARISON</small><strong>Stress &amp; dyke modelling</strong></div>
+            <button id="close-stress" class="ghost" aria-label="Close stress and dyke modelling">×</button>
+          </div>
+          <p class="tomography-intro">Explore a homogeneous elastic stress field, launch dyke trajectories from a magma reservoir, and compare their surface arrivals with mapped vents.</p>
+          <div class="form-grid">
+            <label>σxx (MPa)<input id="stress-sxx" type="number" step="0.1"></label>
+            <label>σyy (MPa)<input id="stress-syy" type="number" step="0.1"></label>
+            <label>σxy (MPa)<input id="stress-sxy" type="number" step="0.1"></label>
+            <label>Topographic load<input id="stress-topographic-load" type="number" min="0" max="3" step="0.1"></label>
+            <label>Reservoir depth (km)<input id="stress-reservoir-depth" type="number" min="0.5" step="0.5"></label>
+            <label>Dyke launches<input id="stress-path-count" type="number" min="1" max="80" step="1"></label>
+            <label>Rock density (kg/m³)<input id="stress-rock-density" type="number" min="500" step="10"></label>
+            <label>Magma density (kg/m³)<input id="stress-magma-density" type="number" min="500" step="10"></label>
+          </div>
+          <label>Displayed stress field
+            <select id="stress-field">
+              <option value="principal">Principal stress directions</option>
+              <option value="sxx">σxx</option><option value="syy">σyy</option><option value="sxy">σxy</option>
+              <option value="differential">Differential stress σ1−σ3</option>
+            </select>
+          </label>
+          <div class="layer-actions">
+            <button id="generate-dyke-preview" class="primary">Generate paths</button>
+            <button id="load-demo-vents" class="ghost">Demo vents</button>
+          </div>
+          <label class="wide file-trigger">Import vents / structures
+            <input id="stress-observation-file" type="file" accept=".csv,.tsv,.txt,.xyz,.geojson,.json,.kml,.gpx,.wkt" hidden>
+          </label>
+          <div id="stress-import-status" class="tomography-status">GIS-ready: GeoJSON, CSV/TSV/XYZ, WKT, KML and GPX point observations.</div>
+          <button id="open-stress-workspace" class="wide ghost">Open Stress &amp; Dykes workspace</button>
+          <p class="shape-help">This interactive SAM-style preview is for exploration and workflow design. Publication calculations should be reproduced with a validated boundary-element or TIM backend.</p>
+        </aside>
+        <aside id="thermal-conduction-editor" class="map-editor thermal-conduction-editor hidden" aria-label="Thermal conduction modelling">
+          <div class="shape-editor-header"><div><small>FOURIER HEAT EQUATION · NO ADVECTION</small><strong>Thermal conduction</strong></div><button id="close-thermal-conduction" class="ghost" aria-label="Close thermal conduction">×</button></div>
+          <p class="tomography-intro">Solve a steady or transient conductive temperature field using the current model geometry, heterogeneous rock properties and radiogenic heat production.</p>
+          <label>Solution mode<select id="thermal-mode"><option value="steady">Steady state</option><option value="transient">Transient</option></select></label>
+          <div class="form-grid">
+            <label>Surface temperature (K)<input id="thermal-top-temperature" type="number" min="0" step="1"></label>
+            <label>Basal temperature (K)<input id="thermal-bottom-temperature" type="number" min="0" step="10"></label>
+            <label>Conductivity (W/m/K)<input id="thermal-conductivity" type="number" min="0.1" step="0.1"></label>
+            <label>Heat production (µW/m³)<input id="thermal-heat-production" type="number" min="0" step="0.05"></label>
+          </div>
+          <label class="checkbox-row"><input id="thermal-use-features" type="checkbox" checked> Use feature-dependent thermal properties</label>
+          <div class="layer-actions"><button id="solve-thermal-preview" class="primary">Solve conduction</button><button id="open-thermal-workspace" class="ghost">Open workspace</button></div>
+          <div id="thermal-conduction-status" class="tomography-status">Ready · conductive heat transport only.</div>
+          <p class="shape-help">Equation: ρCp ∂T/∂t = ∇·(k∇T) + H. Lateral boundaries are insulated. A fixed basal temperature or basal heat flux can be selected in the workspace.</p>
+        </aside>
         <aside id="computation-editor" class="map-editor computation-editor hidden" aria-label="GWB model computation">
           <div class="shape-editor-header">
             <div><small id="computation-engine-version">GWB C++ · WEBASSEMBLY WORKER</small><strong>Model computation</strong></div>
@@ -1002,11 +1079,140 @@
     </div>
   </dialog>
 
+  <dialog id="stress-workspace" class="stress-workspace">
+    <div class="stress-workspace-header">
+      <div><small>ELASTIC STRESS · DYKE PROPAGATION · GIS VALIDATION</small><strong>Stress &amp; Dykes workspace</strong></div>
+      <label>Layout
+        <select id="stress-workspace-layout">
+          <option value="quad">All views</option><option value="map">Map</option><option value="three-d">3D paths</option>
+          <option value="section">Depth section</option><option value="compare">Vent comparison</option>
+        </select>
+      </label>
+      <label>Field
+        <select id="stress-workspace-field">
+          <option value="principal">Principal stresses</option><option value="sxx">σxx</option>
+          <option value="syy">σyy</option><option value="sxy">σxy</option><option value="differential">σ1−σ3</option>
+        </select>
+      </label>
+      <span class="stress-workspace-actions">
+        <button id="stress-run-workspace" class="primary">▶ Recompute</button>
+        <button id="export-stress-geojson" class="ghost">Export GeoJSON</button>
+        <button id="export-stress-screenshot" class="ghost">📷 Screenshot</button>
+        <button id="minimize-stress-workspace" class="ghost" title="Keep these results in the workspace tray">Minimize —</button>
+        <button id="close-stress-workspace" class="ghost">Close</button>
+      </span>
+    </div>
+    <div class="stress-workspace-body">
+      <aside class="stress-workspace-sidebar">
+        <section><small>ELASTIC MEDIUM</small><div class="form-grid">
+          <label>Young’s modulus (GPa)<input id="stress-workspace-young" type="number" min="1" step="1"></label>
+          <label>Poisson ratio<input id="stress-workspace-poisson" type="number" min="0" max="0.49" step="0.01"></label>
+        </div></section>
+        <section><small>MAGMA SOURCE</small><div class="form-grid">
+          <label>Reservoir X<input id="stress-reservoir-x" type="number" step="any"></label>
+          <label>Reservoir Y<input id="stress-reservoir-y" type="number" step="any"></label>
+          <label>Pressure (MPa)<input id="stress-reservoir-pressure" type="number" min="0" step="1"></label>
+          <label>Path steps<input id="stress-path-steps" type="number" min="12" max="160" step="4"></label>
+        </div></section>
+        <section><small>OBSERVATIONS</small><div class="stress-stat-grid">
+          <span><strong id="stress-observation-count">0</strong>vents</span><span><strong id="stress-path-total">0</strong>paths</span>
+          <span><strong id="stress-reached-count">0</strong>arrivals</span><span><strong id="stress-rms-misfit">—</strong>RMS</span>
+        </div></section>
+        <section class="stress-reference-note"><strong>Method provenance</strong><p>SAM-inspired trajectory preview; Mantiloni et al. (2023). Connect a validated Cut &amp; Displace/TIM backend for publication modelling.</p></section>
+      </aside>
+      <div id="stress-workspace-grid" class="stress-workspace-grid" data-layout="quad">
+        <section class="stress-result-pane stress-map-pane"><header>Map · stress field, paths and vents</header><canvas id="stress-map-canvas"></canvas></section>
+        <section class="stress-result-pane stress-3d-pane"><header>3D · reservoir-to-surface trajectories</header><canvas id="stress-3d-canvas"></canvas></section>
+        <section class="stress-result-pane stress-section-pane"><header>Section · depth and topography</header><canvas id="stress-section-canvas"></canvas></section>
+        <section class="stress-result-pane stress-compare-pane"><header>Validation · predicted arrivals vs observed vents</header><canvas id="stress-compare-canvas"></canvas></section>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="thermal-workspace" class="thermal-workspace">
+    <div class="thermal-workspace-header">
+      <div><small>STEADY / TRANSIENT CONDUCTIVE HEAT TRANSPORT</small><strong>Thermal Conduction workspace</strong></div>
+      <label>Layout<select id="thermal-workspace-layout"><option value="triple">Map + section + geotherm</option><option value="map">Temperature map</option><option value="section">Thermal section</option><option value="profile">Geotherm</option></select></label>
+      <span class="thermal-workspace-actions"><button id="thermal-workspace-solve" class="primary">▶ Solve</button><button id="export-thermal-csv" class="ghost">Export CSV</button><button id="export-thermal-screenshot" class="ghost">📷 Screenshot</button><button id="minimize-thermal-workspace" class="ghost" title="Keep this solution in the workspace tray">Minimize —</button><button id="close-thermal-workspace" class="ghost">Close</button></span>
+    </div>
+    <div class="thermal-workspace-body">
+      <aside class="thermal-workspace-sidebar">
+        <section><small>BOUNDARY CONDITIONS</small><label>Bottom boundary<select id="thermal-bottom-mode"><option value="temperature">Fixed temperature</option><option value="flux">Upward heat flux</option></select></label><div class="form-grid"><label>Basal heat flux (mW/m²)<input id="thermal-bottom-flux" type="number" min="0" step="1"></label><label>Transient time (Myr)<input id="thermal-time-myr" type="number" min="0" step="1"></label></div></section>
+        <section><small>THERMAL MATERIAL</small><div class="form-grid"><label>Density (kg/m³)<input id="thermal-density" type="number" min="1" step="10"></label><label>Heat capacity (J/kg/K)<input id="thermal-heat-capacity" type="number" min="1" step="10"></label></div><p>Feature presets adjust conductivity and heat production for continental crust, oceanic lithosphere, mantle and plumes.</p></section>
+        <section><small>NUMERICAL GRID</small><div class="form-grid"><label>Cells X<input id="thermal-nx" type="number" min="12" max="160" step="4"></label><label>Cells Z<input id="thermal-nz" type="number" min="12" max="120" step="4"></label><label>Map depth (km)<input id="thermal-map-depth" type="number" min="0" step="1"></label></div></section>
+        <section class="thermal-run-summary"><small>SOLUTION</small><strong id="thermal-temperature-range">Not solved</strong><span id="thermal-convergence">Configure and solve</span><progress id="thermal-progress" max="100" value="0"></progress></section>
+        <section class="stress-reference-note"><strong>Scope</strong><p>Browser finite-difference preview with insulated lateral boundaries. GOLEM uses an unstructured finite-element multiphysics formulation for higher-fidelity coupled studies.</p></section>
+      </aside>
+      <div id="thermal-workspace-grid" class="thermal-workspace-grid" data-layout="triple">
+        <section class="thermal-result-pane thermal-map-pane"><header>Temperature map at selected depth</header><canvas id="thermal-map-canvas"></canvas></section>
+        <section class="thermal-result-pane thermal-section-pane"><header>Conductive temperature section</header><canvas id="thermal-section-canvas"></canvas></section>
+        <section class="thermal-result-pane thermal-profile-pane"><header>Geotherm and material profile</header><canvas id="thermal-profile-canvas"></canvas></section>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="statistics-workspace" class="statistics-workspace">
+    <div class="statistics-workspace-header">
+      <div><small>MODEL–DATA COMPARISON · SPATIAL PATTERN ANALYSIS</small><strong>Statistics &amp; Validation workspace</strong></div>
+      <label>Analysis
+        <select id="statistics-source">
+          <option value="auto">Best available dataset</option>
+          <option value="dyke">Dyke arrivals ↔ observed vents</option>
+          <option value="gravity">Modelled ↔ observed gravity</option>
+          <option value="topography">Topography spatial correlation</option>
+          <option value="tomography">Tomography spatial correlation</option>
+        </select>
+      </label>
+      <span class="statistics-workspace-actions">
+        <button id="run-statistics" class="primary">▶ Analyse</button>
+        <button id="export-statistics" class="ghost">Export CSV</button>
+        <button id="minimize-statistics-workspace" class="ghost">Minimize —</button>
+        <button id="close-statistics-workspace" class="ghost">Close</button>
+      </span>
+    </div>
+    <div class="statistics-workspace-body">
+      <aside class="statistics-workspace-sidebar">
+        <section><small>SPATIAL SETTINGS</small>
+          <label id="statistics-tolerance-row">Match tolerance <span id="statistics-tolerance-unit">km</span><input id="statistics-tolerance" type="number" min="0" step="1" value="25"></label>
+          <label id="statistics-connectivity-row">Grid neighbours<select id="statistics-connectivity"><option value="4">4 · cardinal</option><option value="8">8 · cardinal + diagonal</option></select></label>
+          <p id="statistics-settings-note">Dyke matching is bidirectional: observation coverage and prediction precision are reported separately.</p>
+        </section>
+        <section><small>DATA STATUS</small><div id="statistics-data-status" class="statistics-data-status">Choose an available dataset.</div></section>
+        <section class="statistics-reference-note"><strong>Interpretation</strong><p>Moran’s I above its random expectation indicates positive spatial autocorrelation. Misfit statistics describe agreement, not uncertainty or statistical significance.</p></section>
+      </aside>
+      <div class="statistics-results">
+        <div id="statistics-metrics" class="statistics-metrics" aria-live="polite"></div>
+        <div class="statistics-visual-grid">
+          <section><header id="statistics-map-title">Spatial comparison</header><canvas id="statistics-map-canvas"></canvas></section>
+          <section><header id="statistics-chart-title">Metric distribution</header><canvas id="statistics-chart-canvas"></canvas></section>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
   <div id="workspace-dock" class="workspace-dock hidden" aria-label="Minimized workspaces" aria-hidden="true">
-    <button id="restore-gravity-workspace" class="workspace-dock-item" title="Reopen the gravity results workspace">
+    <button id="restore-gravity-workspace" class="workspace-dock-item" title="Reopen the gravity results workspace" hidden>
       <span class="workspace-dock-grip" aria-hidden="true"></span>
       <span class="workspace-dock-icon" aria-hidden="true">◫</span>
       <span><strong>Gravity results</strong><small>Computed views preserved</small></span>
+      <span class="workspace-dock-restore" aria-hidden="true">↗</span>
+    </button>
+    <button id="restore-thermal-workspace" class="workspace-dock-item" title="Reopen the thermal conduction workspace" hidden>
+      <span class="workspace-dock-grip" aria-hidden="true"></span>
+      <span class="workspace-dock-icon" aria-hidden="true">♨</span>
+      <span><strong>Thermal conduction</strong><small>Temperature solution preserved</small></span>
+      <span class="workspace-dock-restore" aria-hidden="true">↗</span>
+    </button>
+    <button id="restore-stress-workspace" class="workspace-dock-item" title="Reopen the stress and dykes workspace" hidden>
+      <span class="workspace-dock-grip" aria-hidden="true"></span>
+      <span class="workspace-dock-icon" aria-hidden="true">σ</span>
+      <span><strong>Stress &amp; dykes</strong><small>Computed paths preserved</small></span>
+      <span class="workspace-dock-restore" aria-hidden="true">↗</span>
+    </button>
+    <button id="restore-statistics-workspace" class="workspace-dock-item" title="Reopen the statistics and validation workspace" hidden>
+      <span class="workspace-dock-grip" aria-hidden="true"></span>
+      <span class="workspace-dock-icon" aria-hidden="true">Σ</span>
+      <span><strong>Statistics &amp; validation</strong><small>Analysis results preserved</small></span>
       <span class="workspace-dock-restore" aria-hidden="true">↗</span>
     </button>
   </div>
@@ -1047,7 +1253,7 @@
         </div>
         <p id="tutorial-summary" class="tutorial-summary"></p>
         <figure class="tutorial-media">
-          <img id="tutorial-image" src="/assets/tutorials/workspace-overview.png" alt="">
+          <img id="tutorial-image" src="/assets/tutorials/workspace-overview.jpg" alt="">
           <figcaption id="tutorial-image-caption"></figcaption>
         </figure>
         <ol id="tutorial-step-list" class="tutorial-step-list"></ol>

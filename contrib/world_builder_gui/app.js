@@ -11,6 +11,8 @@ import { parseLithosphereTable, regularLithosphereGrid, remapGeographicGridToCar
 import { parseWorldBuilderText, serializeWorldBuilder } from "./wb-provenance.mjs";
 import { PLANETARY_BODY_CATALOG, searchPlanetaryBodies, planetaryBodyById } from "./planetary-catalog.mjs";
 import { gwbRuntime } from "./gwb-runtime.mjs";
+import { solveSteadyConduction, solveTransientConduction } from "./thermal-conduction.mjs";
+import { pairedStatistics, moransI, pointPatternMisfit } from "./spatial-statistics.mjs";
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
 const COLOR_MAP_VERSION = 4;
@@ -32,6 +34,18 @@ const DEFAULT_GRAVITY = {
   enabled: false, field: "bouguer", referenceDensity: 3300, topographyDensity: 2670,
   samplesX: 32, samplesY: 20, opacity: 55, residualBase: "bouguer",
   observations: [], result: null, signature: null
+};
+const DEFAULT_STRESS = {
+  field: "principal", sxx: 1, syy: 0.45, sxy: 0.15, topographicLoad: 0.7,
+  youngModulus: 30, poissonRatio: 0.25, rockDensity: 2700, magmaDensity: 2400,
+  reservoirX: null, reservoirY: null, reservoirDepthKm: 6, reservoirPressure: 12,
+  pathCount: 16, pathSteps: 64, observations: [], paths: [], metrics: null,
+  source: "SAM-inspired browser preview"
+};
+const DEFAULT_THERMAL_CONDUCTION = {
+  mode:"steady",topTemperature:273,bottomTemperature:1573,bottomMode:"temperature",bottomHeatFlux:0.04,
+  conductivity:3,heatProduction:0.02e-6,density:2800,heatCapacity:1000,useFeatures:true,
+  nx:64,nz:52,timeMyr:20,mapDepthKm:20
 };
 const DEFAULT_TOMOGRAPHY = {
   visible: true, opacity: 76, grid: null, sourceMode: null,
@@ -100,6 +114,15 @@ const secondaryContext = secondaryCanvas.getContext("2d");
 const gravityMapCanvas = document.querySelector("#gravity-map-canvas");
 const gravity3DCanvas = document.querySelector("#gravity-3d-canvas");
 const gravitySectionCanvas = document.querySelector("#gravity-section-canvas");
+const stressMapCanvas = document.querySelector("#stress-map-canvas");
+const stress3DCanvas = document.querySelector("#stress-3d-canvas");
+const stressSectionCanvas = document.querySelector("#stress-section-canvas");
+const stressCompareCanvas = document.querySelector("#stress-compare-canvas");
+const thermalMapCanvas = document.querySelector("#thermal-map-canvas");
+const thermalSectionCanvas = document.querySelector("#thermal-section-canvas");
+const thermalProfileCanvas = document.querySelector("#thermal-profile-canvas");
+const statisticsMapCanvas = document.querySelector("#statistics-map-canvas");
+const statisticsChartCanvas = document.querySelector("#statistics-chart-canvas");
 let canvas = primaryCanvas;
 let context = primaryContext;
 let renderOptions = {
@@ -108,11 +131,13 @@ let renderOptions = {
 };
 const wrap = document.querySelector("#canvas-wrap");
 let state = loadState();
+let thermalConductionResult = null;
+let statisticsResult = null;
 const TUTORIAL_PROGRESS_KEY = "gwb-visual-builder-tutorial-progress-v1";
 const TUTORIALS = [
   {
     id: "getting-started", eyebrow: "GETTING STARTED", title: "Build your first model", shortTitle: "First model",
-    icon: "⌁", duration: "5 min", image: "/assets/tutorials/workspace-overview.png",
+    icon: "⌁", duration: "5 min", image: "/assets/tutorials/workspace-overview.jpg",
     caption: "The main workflow moves from the feature library, through the model grid, to physical properties and export.",
     summary: "Learn the complete Visual Builder workflow without changing your current project: choose a feature, place it, edit its geometry and physical parameters, inspect the model, and export a World Builder file.",
     steps: [
@@ -124,7 +149,7 @@ const TUTORIALS = [
   },
   {
     id: "features", eyebrow: "GEOMETRY", title: "Place and edit geological features", shortTitle: "Features",
-    icon: "◇", duration: "7 min", image: "/assets/tutorials/features-and-properties.png",
+    icon: "◇", duration: "7 min", image: "/assets/tutorials/features-and-properties.jpg",
     caption: "Placement shapes create a useful starting outline; every vertex and physical parameter remains editable.",
     summary: "Build continental and oceanic plates, subduction zones, faults, mantle layers, and plumes. Learn placement shapes, vertex editing, direct resizing, internal layers, and grouped properties.",
     steps: [
@@ -136,7 +161,7 @@ const TUTORIALS = [
   },
   {
     id: "topography", eyebrow: "SURFACE FIELD", title: "Create and paint topography", shortTitle: "Topography",
-    icon: "⌇", duration: "6 min", image: "/assets/tutorials/topography-tools.png",
+    icon: "⌇", duration: "6 min", image: "/assets/tutorials/topography-tools.jpg",
     caption: "Procedural terrain, brush editing, ETOPO, PaleoDEM, and isostatic surfaces share one editable elevation field.",
     summary: "Generate procedural landscapes, sculpt elevations with a brush, import geographic relief, and understand how active topography is converted to feature-compatible GWB surface models.",
     steps: [
@@ -148,7 +173,7 @@ const TUTORIALS = [
   },
   {
     id: "gplates", eyebrow: "PALEOGEOGRAPHY", title: "Import a GPlates reconstruction", shortTitle: "GPlates",
-    icon: "◎", duration: "9 min", image: "/assets/tutorials/gplates-workflow.png",
+    icon: "◎", duration: "9 min", image: "/assets/tutorials/gplates-workflow.jpg",
     caption: "Choose reconstruction age and vector families before converting visible continents, boundaries, and subduction zones into GWB features.",
     summary: "Load an EarthByte/GPlates reconstruction, choose an age and anchor plate, control visible feature families, convert them to editable GWB geometry, and review subduction polarity.",
     steps: [
@@ -160,7 +185,7 @@ const TUTORIALS = [
   },
   {
     id: "tomography", eyebrow: "EARTH STRUCTURE", title: "Explore tomography and extract a feature", shortTitle: "Tomography",
-    icon: "◉", duration: "8 min", image: "/assets/tutorials/tomography-explorer.png",
+    icon: "◉", duration: "8 min", image: "/assets/tutorials/tomography-explorer.jpg",
     caption: "Numerical dVs or dVp depth slices can guide geometry and supply an editable iso-boundary.",
     summary: "Browse tomography models, load a numerical depth slice, change the displayed scalar and colour range, inspect anomalies, and convert a selected iso-region into editable feature geometry.",
     steps: [
@@ -172,7 +197,7 @@ const TUTORIALS = [
   },
   {
     id: "sections", eyebrow: "MODEL INSPECTION", title: "Draw, edit, and inspect sections", shortTitle: "Sections and 3D",
-    icon: "⌁", duration: "6 min", image: "/assets/tutorials/sections-3d.png",
+    icon: "⌁", duration: "6 min", image: "/assets/tutorials/sections-3d.jpg",
     caption: "A curved plan-view path drives the depth section while 3D and section views remain available in a split layout.",
     summary: "Trace a straight or curved section, edit or delete its control points, inspect current topography and internal layers with depth, and compare plan, section, and 3D views.",
     steps: [
@@ -184,7 +209,7 @@ const TUTORIALS = [
   },
   {
     id: "gravity", eyebrow: "POTENTIAL FIELDS", title: "Use the gravity workspace", shortTitle: "Gravity",
-    icon: "∇", duration: "10 min", image: "/assets/tutorials/gravity-workspace.png",
+    icon: "∇", duration: "10 min", image: "/assets/tutorials/gravity-workspace.jpg",
     caption: "Map, 3D, and section panes compare predicted fields with the editable geological model.",
     summary: "Configure the gravity preview, choose free-air, Bouguer, residual, or tensor components, compare map and section profiles, edit contours, and recompute the signal.",
     steps: [
@@ -282,6 +307,8 @@ function loadState() {
       saved.paleogeography = { ...DEFAULT_PALEOGEOGRAPHY, ...(saved.paleogeography || {}), layers: {} };
       saved.sceneLayers = { ...DEFAULT_SCENE_LAYERS, ...(saved.sceneLayers || {}) };
       saved.gravity = { ...DEFAULT_GRAVITY, ...(saved.gravity || {}) };
+      saved.stress = { ...DEFAULT_STRESS, ...(saved.stress || {}) };
+      saved.thermalConduction = { ...DEFAULT_THERMAL_CONDUCTION, ...(saved.thermalConduction || {}) };
       saved.tomography = { ...DEFAULT_TOMOGRAPHY, ...(saved.tomography || {}) };
       saved.lithosphere = { ...DEFAULT_LITHOSPHERE, ...(saved.lithosphere || {}) };
       saved.provenance = {
@@ -320,7 +347,7 @@ function loadState() {
     settings: { ...DEFAULT_SETTINGS }, features: [], connections: [], rawWorld: null,
     appearance: { ...DEFAULT_APPEARANCE }, topography: { ...DEFAULT_TOPOGRAPHY },
     paleogeography: { ...DEFAULT_PALEOGEOGRAPHY }, sceneLayers: { ...DEFAULT_SCENE_LAYERS },
-    gravity: { ...DEFAULT_GRAVITY }, tomography: { ...DEFAULT_TOMOGRAPHY }, lithosphere: { ...DEFAULT_LITHOSPHERE },
+    gravity: { ...DEFAULT_GRAVITY }, stress: { ...DEFAULT_STRESS }, thermalConduction:{...DEFAULT_THERMAL_CONDUCTION}, tomography: { ...DEFAULT_TOMOGRAPHY }, lithosphere: { ...DEFAULT_LITHOSPHERE },
     provenance: { tomographyModelIds: [], lithosphereModelIds: [] }, exportOptions: { ...DEFAULT_EXPORT_OPTIONS },
     colorMaps: structuredClone(DEFAULT_COLOR_MAPS), colorMapVersion: COLOR_MAP_VERSION,
     layerGroups: [], derivedFields: [], ui: { ...DEFAULT_UI }, sectionPath: []
@@ -394,6 +421,8 @@ function restoreProjectStateDocument(documentState) {
     paleogeography: { ...DEFAULT_PALEOGEOGRAPHY, ...(restored.paleogeography || {}) },
     sceneLayers: { ...DEFAULT_SCENE_LAYERS, ...(restored.sceneLayers || {}) },
     gravity: { ...DEFAULT_GRAVITY, ...(restored.gravity || {}) },
+    stress: { ...DEFAULT_STRESS, ...(restored.stress || {}) },
+    thermalConduction: { ...DEFAULT_THERMAL_CONDUCTION, ...(restored.thermalConduction || {}) },
     tomography: { ...DEFAULT_TOMOGRAPHY, ...(restored.tomography || {}) },
     lithosphere: { ...DEFAULT_LITHOSPHERE, ...(restored.lithosphere || {}) },
     provenance: {
@@ -3955,6 +3984,48 @@ function sectionDepthProfile(feature, create = false) {
   return feature.sectionDepthProfile;
 }
 
+function sectionLayerDepthProfile(feature, boundaryIndex, create = false) {
+  const stored = feature.sectionLayerDepthProfiles?.[boundaryIndex];
+  const valid = Array.isArray(stored) && stored.length >= 2
+    && stored.every(point => Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1])));
+  if (valid) {
+    feature.sectionLayerDepthProfiles[boundaryIndex] = stored
+      .map(point => [Math.max(0, Math.min(1, Number(point[0]))), Math.max(0, Number(point[1]))])
+      .sort((a, b) => a[0] - b[0]);
+    return feature.sectionLayerDepthProfiles[boundaryIndex];
+  }
+  const layer = feature.layers?.[boundaryIndex];
+  if (!layer) return null;
+  const topDepth = Number(feature.minDepth) || 0;
+  const bottomDepth = Math.max(topDepth + 1, Number(feature.maxDepth) || topDepth + featureThickness(feature));
+  const ratio = Math.max(0, Math.min(1, (Number(layer.maxDepth) - topDepth) / Math.max(1, bottomDepth - topDepth)));
+  const outer = sectionDepthProfile(feature);
+  const controls = [0, 1].map(position => {
+    const top = interpolateSectionContour(outer.top, position);
+    const bottom = interpolateSectionContour(outer.bottom, position);
+    return [position, top + (bottom - top) * ratio];
+  });
+  if (create) {
+    feature.sectionLayerDepthProfiles ||= [];
+    feature.sectionLayerDepthProfiles[boundaryIndex] = controls;
+    return feature.sectionLayerDepthProfiles[boundaryIndex];
+  }
+  return controls;
+}
+
+function sectionLayerEdgeDepth(feature, edgeIndex, position) {
+  if (edgeIndex <= 0) return interpolateSectionContour(sectionDepthProfile(feature).top, position);
+  if (edgeIndex >= (feature.layers?.length || 0)) return interpolateSectionContour(sectionDepthProfile(feature).bottom, position);
+  return interpolateSectionContour(sectionLayerDepthProfile(feature, edgeIndex - 1), position);
+}
+
+function constrainSectionLayerDepth(feature, boundaryIndex, position, depth) {
+  const minimumGap = 1000;
+  const upper = sectionLayerEdgeDepth(feature, boundaryIndex, position) + minimumGap;
+  const lower = sectionLayerEdgeDepth(feature, boundaryIndex + 2, position) - minimumGap;
+  return Math.max(upper, Math.min(lower, depth));
+}
+
 function interpolateSectionContour(points, position) {
   const u = Math.max(0, Math.min(1, position));
   let upper = points.findIndex(point => point[0] >= u);
@@ -4029,6 +4100,35 @@ function traceSectionLayerBoundary(feature, ratio, range, pad, plotHeight, maxDe
   points.slice(1).forEach(point => context.lineTo(...point));
 }
 
+function sectionLayerBoundaryPoint(feature, boundaryIndex, position, range, pad, plotHeight, maxDepth) {
+  const depth = interpolateSectionContour(sectionLayerDepthProfile(feature, boundaryIndex), position);
+  return [
+    range.left + position * (range.right - range.left),
+    pad.top + depth / maxDepth * plotHeight
+  ];
+}
+
+function traceEditableSectionLayerBoundary(feature, boundaryIndex, range, pad, plotHeight, maxDepth, steps = 32) {
+  const points = Array.from({ length: steps + 1 }, (_, index) =>
+    sectionLayerBoundaryPoint(feature, boundaryIndex, index / steps, range, pad, plotHeight, maxDepth));
+  context.beginPath();
+  context.moveTo(...points[0]);
+  points.slice(1).forEach(point => context.lineTo(...point));
+}
+
+function traceEditableSectionLayerBand(feature, layerIndex, range, pad, plotHeight, maxDepth, steps = 32) {
+  const pointAt = (edgeIndex, position) => [
+    range.left + position * (range.right - range.left),
+    pad.top + sectionLayerEdgeDepth(feature, edgeIndex, position) / maxDepth * plotHeight
+  ];
+  const upper = Array.from({ length: steps + 1 }, (_, index) => pointAt(layerIndex, index / steps));
+  const lower = Array.from({ length: steps + 1 }, (_, index) => pointAt(layerIndex + 1, index / steps)).reverse();
+  context.beginPath();
+  context.moveTo(...upper[0]);
+  [...upper.slice(1), ...lower].forEach(point => context.lineTo(...point));
+  context.closePath();
+}
+
 function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plotHeight, maxDepth, geometry) {
   const range = sectionFeatureRange(feature, section, pad, plotWidth);
   const profile = sectionDepthProfile(feature);
@@ -4040,7 +4140,7 @@ function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plot
       if (!featureSublayerVisible(feature, layerIndex)) return;
       const layerTopRatio = Math.max(0, Math.min(1, (Number(layer.minDepth) - topDepth) / depthSpan));
       const layerBottomRatio = Math.max(layerTopRatio, Math.min(1, (Number(layer.maxDepth) - topDepth) / depthSpan));
-      traceSectionBand(feature, layerTopRatio, layerBottomRatio, range, pad, plotHeight, maxDepth);
+      traceEditableSectionLayerBand(feature, layerIndex, range, pad, plotHeight, maxDepth);
       context.fillStyle = state.appearance.renderMode === "temperature"
         ? temperatureColor(layer.temperature, .72)
         : `hsla(${172 + layerIndex * 31}, 48%, 52%, .32)`;
@@ -4052,7 +4152,8 @@ function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plot
     });
     feature.layers.slice(0, -1).forEach((layer, boundaryIndex) => {
       const ratio = Math.max(0, Math.min(1, (Number(layer.maxDepth) - topDepth) / depthSpan));
-      traceSectionLayerBoundary(feature, ratio, range, pad, plotHeight, maxDepth);
+      const boundaryControls = sectionLayerDepthProfile(feature, boundaryIndex);
+      traceEditableSectionLayerBoundary(feature, boundaryIndex, range, pad, plotHeight, maxDepth);
       const selected = selectedSectionLayer?.featureId === feature.id
         && (selectedSectionLayer.layerIndex === boundaryIndex || selectedSectionLayer.layerIndex === boundaryIndex + 1);
       context.save();
@@ -4062,10 +4163,32 @@ function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plot
       context.stroke();
       context.restore();
       if (featureIsSelected(feature.id) && !renderOptions.suppressFeatureHandles) {
-        const point = sectionBandPoint(feature, ratio, .5, range, pad, plotHeight, maxDepth);
+        const point = sectionLayerBoundaryPoint(feature, boundaryIndex, .5, range, pad, plotHeight, maxDepth);
         geometry.layerHandles.push({
           featureId: feature.id, boundaryIndex, point, range, pad, plotHeight, maxDepth,
           topDepth, bottomDepth, depthSpan
+        });
+        boundaryControls.forEach((control, index) => {
+          const controlPoint = sectionLayerBoundaryPoint(feature, boundaryIndex, control[0], range, pad, plotHeight, maxDepth);
+          geometry.layerControls.push({
+            featureId: feature.id, boundaryIndex, index, point: controlPoint, range, pad, plotHeight, maxDepth
+          });
+          context.beginPath();
+          context.arc(controlPoint[0], controlPoint[1], selectedSectionContour?.featureId === feature.id
+            && selectedSectionContour.contour === "layer" && selectedSectionContour.boundaryIndex === boundaryIndex
+            && selectedSectionContour.index === index ? 6 : 4.5, 0, Math.PI * 2);
+          context.fillStyle = "#f0ca66";
+          context.strokeStyle = canvasPalette().deep;
+          context.lineWidth = 1.5;
+          context.fill(); context.stroke();
+        });
+        boundaryControls.slice(0, -1).forEach((control, index) => {
+          geometry.layerSegments.push({
+            featureId: feature.id, boundaryIndex, index,
+            start: sectionLayerBoundaryPoint(feature, boundaryIndex, control[0], range, pad, plotHeight, maxDepth),
+            end: sectionLayerBoundaryPoint(feature, boundaryIndex, boundaryControls[index + 1][0], range, pad, plotHeight, maxDepth),
+            range, pad, plotHeight, maxDepth
+          });
         });
         context.save();
         context.translate(point[0], point[1]);
@@ -4078,7 +4201,8 @@ function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plot
         context.restore();
         context.fillStyle = canvasPalette().text;
         context.font = "600 8px ui-monospace";
-        context.fillText(`${(Number(layer.maxDepth) / 1000).toFixed(1)} km`, point[0] + 9, point[1] - 6);
+        const centerDepth = interpolateSectionContour(boundaryControls, .5);
+        context.fillText(`${(centerDepth / 1000).toFixed(1)} km`, point[0] + 9, point[1] - 6);
       }
     });
   } else if (!renderOptions.featureContoursOnly) {
@@ -4115,21 +4239,20 @@ function drawEditableSectionFeature(feature, meta, section, pad, plotWidth, plot
 function sectionHit(targetCanvas, point) {
   const geometry = sectionInteractionGeometry.get(targetCanvas);
   if (!geometry) return null;
+  const layerControl = geometry.layerControls.find(item => Math.hypot(point[0] - item.point[0], point[1] - item.point[1]) <= 10);
+  if (layerControl) return { type: "layer-control", ...layerControl };
   const layerHandle = geometry.layerHandles.find(item => Math.hypot(point[0] - item.point[0], point[1] - item.point[1]) <= 11);
   if (layerHandle) return { type: "layer-handle", ...layerHandle };
   const handle = geometry.handles.find(item => Math.hypot(point[0] - item.point[0], point[1] - item.point[1]) <= 10);
   if (handle) return { type: "handle", ...handle };
+  const layerSegment = geometry.layerSegments.find(item => distanceToSegment(point, item.start, item.end).distance <= 7);
+  if (layerSegment) return { type: "layer-segment", ...layerSegment };
   const layerRegion = [...geometry.layerRegions].reverse().find(item => {
     if (point[0] < item.range.left || point[0] > item.range.right) return false;
     const position = (point[0] - item.range.left) / Math.max(1, item.range.right - item.range.left);
-    const top = sectionBandPoint(
-      state.features.find(feature => feature.id === item.featureId),
-      item.topRatio, position, item.range, item.pad, item.plotHeight, item.maxDepth
-    )[1];
-    const bottom = sectionBandPoint(
-      state.features.find(feature => feature.id === item.featureId),
-      item.bottomRatio, position, item.range, item.pad, item.plotHeight, item.maxDepth
-    )[1];
+    const feature = state.features.find(feature => feature.id === item.featureId);
+    const top = item.pad.top + sectionLayerEdgeDepth(feature, item.layerIndex, position) / item.maxDepth * item.plotHeight;
+    const bottom = item.pad.top + sectionLayerEdgeDepth(feature, item.layerIndex + 1, position) / item.maxDepth * item.plotHeight;
     return point[1] >= top && point[1] <= bottom;
   });
   if (layerRegion) return { type: "layer-region", ...layerRegion };
@@ -4148,10 +4271,34 @@ function beginSectionContourInteraction(targetCanvas, event, point) {
   if (!hit) return false;
   selectFeature(hit.featureId);
   if (hit.type === "layer-handle") {
+    const feature = state.features.find(item => item.id === hit.featureId);
+    const controls = sectionLayerDepthProfile(feature, hit.boundaryIndex, true);
     selectedSectionLayer = { featureId: hit.featureId, layerIndex: hit.boundaryIndex };
-    sectionLayerDrag = { ...hit, pointerId: event.pointerId, canvas: targetCanvas };
+    selectedSectionContour = null;
+    sectionLayerDrag = {
+      ...hit, pointerId: event.pointerId, canvas: targetCanvas, mode: "translate",
+      startPointerDepth: (point[1] - hit.pad.top) / hit.plotHeight * hit.maxDepth,
+      originalControls: controls.map(control => [...control])
+    };
     targetCanvas.setPointerCapture(event.pointerId);
     targetCanvas.style.cursor = "row-resize";
+  } else if (hit.type === "layer-control") {
+    const feature = state.features.find(item => item.id === hit.featureId);
+    sectionLayerDepthProfile(feature, hit.boundaryIndex, true);
+    selectedSectionLayer = { featureId: hit.featureId, layerIndex: hit.boundaryIndex };
+    selectedSectionContour = { featureId: hit.featureId, contour: "layer", boundaryIndex: hit.boundaryIndex, index: hit.index };
+    sectionContourDrag = { ...hit, contour: "layer", pointerId: event.pointerId, canvas: targetCanvas };
+    targetCanvas.setPointerCapture(event.pointerId);
+    targetCanvas.style.cursor = "ns-resize";
+  } else if (hit.type === "layer-segment") {
+    const inserted = insertSectionLayerControl(hit, point);
+    if (inserted) {
+      selectedSectionLayer = { featureId: hit.featureId, layerIndex: hit.boundaryIndex };
+      selectedSectionContour = { featureId: hit.featureId, contour: "layer", boundaryIndex: hit.boundaryIndex, index: inserted.index };
+      sectionContourDrag = { ...hit, contour: "layer", index: inserted.index, pointerId: event.pointerId, canvas: targetCanvas };
+      targetCanvas.setPointerCapture(event.pointerId);
+      targetCanvas.style.cursor = "ns-resize";
+    }
   } else if (hit.type === "layer-region") {
     selectedSectionLayer = { featureId: hit.featureId, layerIndex: hit.layerIndex };
     requestAnimationFrame(() => {
@@ -4178,16 +4325,13 @@ function moveSectionContour(targetCanvas, event, point) {
     const upper = feature?.layers?.[sectionLayerDrag.boundaryIndex];
     const lower = feature?.layers?.[sectionLayerDrag.boundaryIndex + 1];
     if (!feature || !upper || !lower) return false;
-    const position = Math.max(0, Math.min(1,
-      (point[0] - sectionLayerDrag.range.left) / Math.max(1, sectionLayerDrag.range.right - sectionLayerDrag.range.left)));
-    const profile = sectionDepthProfile(feature);
-    const contourTop = interpolateSectionContour(profile.top, position);
-    const contourBottom = interpolateSectionContour(profile.bottom, position);
-    const candidateContourDepth = Math.max(contourTop, Math.min(contourBottom,
-      (point[1] - sectionLayerDrag.pad.top) / sectionLayerDrag.plotHeight * sectionLayerDrag.maxDepth));
-    const ratio = (candidateContourDepth - contourTop) / Math.max(1, contourBottom - contourTop);
-    const candidate = sectionLayerDrag.topDepth + ratio * sectionLayerDrag.depthSpan;
-    const boundary = Math.max(Number(upper.minDepth) + 1000, Math.min(Number(lower.maxDepth) - 1000, candidate));
+    const controls = sectionLayerDepthProfile(feature, sectionLayerDrag.boundaryIndex, true);
+    const pointerDepth = (point[1] - sectionLayerDrag.pad.top) / sectionLayerDrag.plotHeight * sectionLayerDrag.maxDepth;
+    const delta = pointerDepth - sectionLayerDrag.startPointerDepth;
+    sectionLayerDrag.originalControls.forEach((original, index) => {
+      controls[index][1] = constrainSectionLayerDepth(feature, sectionLayerDrag.boundaryIndex, original[0], original[1] + delta);
+    });
+    const boundary = controls.reduce((sum, control) => sum + control[1], 0) / controls.length;
     upper.maxDepth = boundary;
     lower.minDepth = boundary;
     feature.layersEdited = true;
@@ -4198,6 +4342,27 @@ function moveSectionContour(targetCanvas, event, point) {
   if (!sectionContourDrag || sectionContourDrag.canvas !== targetCanvas) return false;
   const feature = state.features.find(item => item.id === sectionContourDrag.featureId);
   if (!feature) return false;
+  if (sectionContourDrag.contour === "layer") {
+    const controls = sectionLayerDepthProfile(feature, sectionContourDrag.boundaryIndex, true);
+    const control = controls[sectionContourDrag.index];
+    const isEndpoint = sectionContourDrag.index === 0 || sectionContourDrag.index === controls.length - 1;
+    if (!isEndpoint) {
+      const minimumPosition = controls[sectionContourDrag.index - 1][0] + .01;
+      const maximumPosition = controls[sectionContourDrag.index + 1][0] - .01;
+      control[0] = Math.max(minimumPosition, Math.min(maximumPosition,
+        (point[0] - sectionContourDrag.range.left) / Math.max(1, sectionContourDrag.range.right - sectionContourDrag.range.left)));
+    }
+    const candidateDepth = Math.max(0, (point[1] - sectionContourDrag.pad.top) / sectionContourDrag.plotHeight * sectionContourDrag.maxDepth);
+    control[1] = constrainSectionLayerDepth(feature, sectionContourDrag.boundaryIndex, control[0], candidateDepth);
+    const boundary = controls.reduce((sum, item) => sum + item[1], 0) / controls.length;
+    feature.layers[sectionContourDrag.boundaryIndex].maxDepth = boundary;
+    feature.layers[sectionContourDrag.boundaryIndex + 1].minDepth = boundary;
+    feature.layersEdited = true;
+    feature.layerMode = "depths";
+    feature.sectionLayerProfilesEdited = true;
+    draw();
+    return true;
+  }
   const profile = sectionDepthProfile(feature, true);
   const controls = profile[sectionContourDrag.contour];
   const control = controls[sectionContourDrag.index];
@@ -4223,7 +4388,7 @@ function finishSectionContourInteraction(targetCanvas) {
     const boundary = feature?.layers?.[sectionLayerDrag.boundaryIndex]?.maxDepth;
     sectionLayerDrag = null;
     targetCanvas.style.cursor = "default";
-    persist(); renderInspector(); draw();
+    persist(); commitHistory(); renderInspector(); draw();
     showToast(`Sublayer boundary set to ${(Number(boundary) / 1000).toFixed(1)} km`);
     return true;
   }
@@ -4231,13 +4396,36 @@ function finishSectionContourInteraction(targetCanvas) {
   const feature = state.features.find(item => item.id === sectionContourDrag.featureId);
   sectionContourDrag = null;
   targetCanvas.style.cursor = "default";
-  persist(); renderInspector(); draw();
+  persist(); commitHistory(); renderInspector(); draw();
   showToast(`${feature?.name || "Feature"} section contour updated`);
   return true;
 }
 
+function insertSectionLayerControl(hit, point) {
+  const feature = state.features.find(item => item.id === hit.featureId);
+  if (!feature) return null;
+  const controls = sectionLayerDepthProfile(feature, hit.boundaryIndex, true);
+  const position = Math.max(.01, Math.min(.99,
+    (point[0] - hit.range.left) / Math.max(1, hit.range.right - hit.range.left)));
+  const depth = interpolateSectionContour(controls, position);
+  controls.push([position, depth]);
+  controls.sort((a, b) => a[0] - b[0]);
+  const index = controls.findIndex(control => control[0] === position);
+  feature.sectionLayerProfilesEdited = true;
+  return { index, position, depth };
+}
+
 function addSectionContourControl(targetCanvas, point) {
   let hit = sectionHit(targetCanvas, point);
+  if (hit?.type === "layer-segment") {
+    const inserted = insertSectionLayerControl(hit, point);
+    if (!inserted) return false;
+    selectedSectionLayer = { featureId: hit.featureId, layerIndex: hit.boundaryIndex };
+    selectedSectionContour = { featureId: hit.featureId, contour: "layer", boundaryIndex: hit.boundaryIndex, index: inserted.index };
+    persist(); commitHistory(); draw();
+    showToast("Added sublayer boundary vertex · drag it to shape the interface");
+    return true;
+  }
   if (hit?.type === "layer-region") {
     const region = sectionInteractionGeometry.get(targetCanvas)?.regions
       .find(item => item.featureId === hit.featureId);
@@ -4264,17 +4452,28 @@ function addSectionContourControl(targetCanvas, point) {
 
 function removeSelectedSectionContour() {
   if (!selectedSectionContour) return false;
+  const removingLayerControl = selectedSectionContour.contour === "layer";
+  const boundaryIndex = selectedSectionContour.boundaryIndex;
   const feature = state.features.find(item => item.id === selectedSectionContour.featureId);
-  const controls = feature && sectionDepthProfile(feature, true)[selectedSectionContour.contour];
+  const controls = feature && (removingLayerControl
+    ? sectionLayerDepthProfile(feature, selectedSectionContour.boundaryIndex, true)
+    : sectionDepthProfile(feature, true)[selectedSectionContour.contour]);
   if (!controls || controls.length <= 2 || selectedSectionContour.index === 0 || selectedSectionContour.index === controls.length - 1) {
     showToast("End contour controls are retained to preserve the feature boundary");
     return true;
   }
   controls.splice(selectedSectionContour.index, 1);
   selectedSectionContour = null;
-  feature.sectionProfileEdited = true;
-  persist(); draw();
-  showToast("Section contour control removed");
+  if (removingLayerControl) {
+    const boundary = controls.reduce((sum, control) => sum + control[1], 0) / controls.length;
+    feature.layers[boundaryIndex].maxDepth = boundary;
+    feature.layers[boundaryIndex + 1].minDepth = boundary;
+    feature.layersEdited = true;
+    feature.sectionLayerProfilesEdited = true;
+  }
+  else feature.sectionProfileEdited = true;
+  persist(); commitHistory(); draw();
+  showToast("Section boundary vertex removed");
   return true;
 }
 
@@ -4286,11 +4485,14 @@ function drawSectionProfile(width, height) {
   const plotWidth = width - pad.left - pad.right;
   const plotHeight = height - pad.top - pad.bottom;
   const visibleFeatures = state.features.filter(featureVisible);
-  const profileDepths = visibleFeatures.flatMap(feature => feature.sectionDepthProfile
-    ? [...(feature.sectionDepthProfile.top || []), ...(feature.sectionDepthProfile.bottom || [])].map(point => Number(point[1]) || 0)
-    : []);
+  const profileDepths = visibleFeatures.flatMap(feature => [
+    ...(feature.sectionDepthProfile
+      ? [...(feature.sectionDepthProfile.top || []), ...(feature.sectionDepthProfile.bottom || [])]
+      : []),
+    ...(feature.sectionLayerDepthProfiles || []).flatMap(profile => profile || [])
+  ].map(point => Number(point[1]) || 0));
   const maxDepth = Math.max(state.settings.zMax - state.settings.zMin, ...visibleFeatures.map(feature => feature.maxDepth || 0), ...profileDepths, 1);
-  const interactionGeometry = { handles: [], regions: [], layerHandles: [], layerRegions: [] };
+  const interactionGeometry = { handles: [], regions: [], layerHandles: [], layerControls: [], layerSegments: [], layerRegions: [] };
   sectionInteractionGeometry.set(canvas, interactionGeometry);
   if (sceneLayerVisible("grid")) {
     context.strokeStyle = "#31434b"; context.strokeRect(pad.left, pad.top, plotWidth, plotHeight);
@@ -4499,9 +4701,34 @@ function renderGravityWorkspace() {
 
 function syncWorkspaceDock() {
   const dock = document.querySelector("#workspace-dock");
-  const minimized = Boolean(state.ui?.gravityWorkspaceMinimized);
-  dock.classList.toggle("hidden", !minimized);
-  dock.setAttribute("aria-hidden", String(!minimized));
+  const gravityRestore = document.querySelector("#restore-gravity-workspace");
+  if (gravityRestore) gravityRestore.hidden = !Boolean(state.ui?.gravityWorkspaceMinimized);
+  const hasMinimizedWorkspace = [...dock.querySelectorAll(".workspace-dock-item")].some(button => !button.hidden);
+  dock.classList.toggle("hidden", !hasMinimizedWorkspace);
+  dock.setAttribute("aria-hidden", String(!hasMinimizedWorkspace));
+}
+
+function minimizeSimpleWorkspace(dialogId, restoreId) {
+  document.querySelector(`#${dialogId}`)?.close();
+  const restore = document.querySelector(`#${restoreId}`);
+  if (restore) restore.hidden = false;
+  syncWorkspaceDock();
+}
+
+function restoreSimpleWorkspace(dialogId, restoreId, render) {
+  const restore = document.querySelector(`#${restoreId}`);
+  if (restore) restore.hidden = true;
+  syncWorkspaceDock();
+  const dialog = document.querySelector(`#${dialogId}`);
+  if (dialog && !dialog.open) dialog.showModal();
+  if (render) requestAnimationFrame(render);
+}
+
+function closeSimpleWorkspace(dialogId, restoreId) {
+  document.querySelector(`#${dialogId}`)?.close();
+  const restore = document.querySelector(`#${restoreId}`);
+  if (restore) restore.hidden = true;
+  syncWorkspaceDock();
 }
 
 function syncGravityWorkspaceControls() {
@@ -4698,6 +4925,295 @@ function bindGravityWorkspaceCanvas(target, mode) {
   target.style.cursor = mode === "three-d" ? "grab"
     : state.ui.gravityWorkspaceSectionPicking || state.ui.gravityWorkspaceContourEditing ? "crosshair" : "move";
 }
+
+function ensureStress() {
+  state.stress ||= { ...DEFAULT_STRESS };
+  Object.entries(DEFAULT_STRESS).forEach(([key, value]) => {
+    if (state.stress[key] === undefined) state.stress[key] = structuredClone(value);
+  });
+  state.stress.observations = Array.isArray(state.stress.observations) ? state.stress.observations : [];
+  state.stress.paths = Array.isArray(state.stress.paths) ? state.stress.paths : [];
+  const { xMin, xMax, yMin, yMax } = state.settings;
+  if (state.stress.reservoirX == null || !Number.isFinite(Number(state.stress.reservoirX))
+    || Number(state.stress.reservoirX) < Number(xMin) || Number(state.stress.reservoirX) > Number(xMax)) {
+    state.stress.reservoirX = (Number(xMin) + Number(xMax)) / 2;
+  }
+  if (state.stress.reservoirY == null || !Number.isFinite(Number(state.stress.reservoirY))
+    || Number(state.stress.reservoirY) < Number(yMin) || Number(state.stress.reservoirY) > Number(yMax)) {
+    state.stress.reservoirY = (Number(yMin) + Number(yMax)) / 2;
+  }
+  return state.stress;
+}
+
+function stressPrincipal(stress = ensureStress()) {
+  const mean = (Number(stress.sxx) + Number(stress.syy)) / 2;
+  const radius = Math.hypot((Number(stress.sxx) - Number(stress.syy)) / 2, Number(stress.sxy));
+  return { sigma1: mean + radius, sigma3: mean - radius, angle: .5 * Math.atan2(2 * Number(stress.sxy), Number(stress.sxx) - Number(stress.syy)) };
+}
+
+function generateDykePaths() {
+  const stress = ensureStress();
+  const { xMin, xMax, yMin, yMax } = state.settings;
+  const spanX = Math.max(1, Number(xMax) - Number(xMin));
+  const spanY = Math.max(1, Number(yMax) - Number(yMin));
+  const principal = stressPrincipal(stress);
+  const count = Math.max(1, Math.min(80, Math.round(Number(stress.pathCount) || 1)));
+  const steps = Math.max(12, Math.min(160, Math.round(Number(stress.pathSteps) || 64)));
+  const buoyancy = Math.max(-.8, Math.min(1.2, (Number(stress.rockDensity) - Number(stress.magmaDensity)) / 500));
+  stress.paths = Array.from({ length: count }, (_, pathIndex) => {
+    const seedAngle = pathIndex / count * Math.PI * 2;
+    const launchRadius = Math.min(spanX, spanY) * .018;
+    const startX = Number(stress.reservoirX) + Math.cos(seedAngle) * launchRadius;
+    const startY = Number(stress.reservoirY) + Math.sin(seedAngle) * launchRadius;
+    const points = [];
+    for (let index = 0; index <= steps; index++) {
+      const t = index / steps;
+      const rise = Math.pow(t, .82 + Math.max(-.2, .18 - buoyancy * .12));
+      const steering = Math.sin(Math.PI * t);
+      const principalBias = (principal.sigma1 - principal.sigma3) / Math.max(1, Math.abs(principal.sigma1) + Math.abs(principal.sigma3));
+      const pressure = Math.max(0, Number(stress.reservoirPressure)) / 50;
+      const topographic = Number(stress.topographicLoad) * .035;
+      const x = startX + spanX * steering * (
+        Math.cos(seedAngle) * (.065 + pressure * .028)
+        + Math.cos(principal.angle + Math.PI / 2) * principalBias * .11
+        + Math.sin(seedAngle * 3) * topographic * 1.5
+      );
+      const y = startY + spanY * steering * (
+        Math.sin(seedAngle) * (.065 + pressure * .028)
+        + Math.sin(principal.angle + Math.PI / 2) * principalBias * .11
+        + Math.cos(seedAngle * 2) * topographic * 1.5
+      );
+      const elevationKm = sampleTopographyValue([x, y]) / 1000;
+      const depthKm = Math.max(-elevationKm, Number(stress.reservoirDepthKm) * (1 - rise) - elevationKm * t);
+      points.push([x, y, depthKm]);
+    }
+    return { id: `dyke-${pathIndex + 1}`, points, reachedSurface: points.at(-1)[2] <= .05 };
+  });
+  const arrivals = stress.paths.filter(path => path.reachedSurface).map(path => path.points.at(-1));
+  const distances = stress.observations.map(observation => {
+    if (!arrivals.length) return null;
+    return Math.min(...arrivals.map(arrival => Math.hypot(arrival[0] - observation.x, arrival[1] - observation.y)));
+  }).filter(Number.isFinite);
+  const unitScale = state.settings.coordinateSystem === "spherical" ? 1 : 1 / 1000;
+  stress.metrics = {
+    reached: arrivals.length,
+    rms: distances.length ? Math.sqrt(distances.reduce((sum, value) => sum + value * value, 0) / distances.length) * unitScale : null,
+    mean: distances.length ? distances.reduce((sum, value) => sum + value, 0) / distances.length * unitScale : null,
+    unit: state.settings.coordinateSystem === "spherical" ? "°" : "km"
+  };
+  persist(); syncStressUI(); renderStressWorkspace();
+  return stress.paths;
+}
+
+function stressCanvas(target) {
+  const ctx = resizeStandaloneCanvas(target);
+  if (!ctx) return null;
+  const width = target.clientWidth; const height = target.clientHeight;
+  const palette = canvasPalette();
+  ctx.fillStyle = palette.background; ctx.fillRect(0, 0, width, height);
+  return { ctx, width, height, palette };
+}
+
+function stressProjector(width, height, pad = 38) {
+  const { xMin, xMax, yMin, yMax } = state.settings;
+  return ([x, y]) => [
+    pad + (Number(x) - Number(xMin)) / Math.max(1, Number(xMax) - Number(xMin)) * (width - pad * 2),
+    height - pad - (Number(y) - Number(yMin)) / Math.max(1, Number(yMax) - Number(yMin)) * (height - pad * 2)
+  ];
+}
+
+function drawStressGrid(ctx, width, height, project) {
+  const palette = canvasPalette();
+  ctx.save(); ctx.strokeStyle = palette.grid; ctx.lineWidth = 1;
+  for (let index = 0; index <= 8; index++) {
+    const a = project([state.settings.xMin + (state.settings.xMax - state.settings.xMin) * index / 8, state.settings.yMin]);
+    const b = project([state.settings.xMin + (state.settings.xMax - state.settings.xMin) * index / 8, state.settings.yMax]);
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+  }
+  for (let index = 0; index <= 6; index++) {
+    const a = project([state.settings.xMin, state.settings.yMin + (state.settings.yMax - state.settings.yMin) * index / 6]);
+    const b = project([state.settings.xMax, state.settings.yMin + (state.settings.yMax - state.settings.yMin) * index / 6]);
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawStressFeatures(ctx, project) {
+  state.features.filter(featureVisible).forEach(feature => {
+    const points = feature.points.map(project); if (!points.length) return;
+    ctx.beginPath(); ctx.moveTo(...points[0]); points.slice(1).forEach(point => ctx.lineTo(...point));
+    if (FEATURE_TYPES[feature.model].geometry === "area") ctx.closePath();
+    ctx.fillStyle = `${FEATURE_TYPES[feature.model].color}22`; ctx.strokeStyle = FEATURE_TYPES[feature.model].color; ctx.lineWidth = 1.4;
+    if (FEATURE_TYPES[feature.model].geometry === "area") ctx.fill(); ctx.stroke();
+  });
+}
+
+function drawStressMap() {
+  const surface = stressCanvas(stressMapCanvas); if (!surface) return;
+  const { ctx, width, height, palette } = surface; const stress = ensureStress(); const project = stressProjector(width, height);
+  drawStressGrid(ctx, width, height, project); drawStressFeatures(ctx, project);
+  const principal = stressPrincipal(stress);
+  for (let gx = 1; gx <= 6; gx++) for (let gy = 1; gy <= 4; gy++) {
+    const world = [state.settings.xMin + (state.settings.xMax - state.settings.xMin) * gx / 7, state.settings.yMin + (state.settings.yMax - state.settings.yMin) * gy / 5];
+    const [x, y] = project(world); const length = 10 + Math.min(12, Math.abs(principal.sigma1 - principal.sigma3) * 4);
+    const angle = principal.angle + Number(stress.topographicLoad) * .08 * Math.sin(gx + gy);
+    ctx.strokeStyle = "rgba(118,203,255,.62)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x - Math.cos(angle) * length, y + Math.sin(angle) * length); ctx.lineTo(x + Math.cos(angle) * length, y - Math.sin(angle) * length); ctx.stroke();
+  }
+  stress.paths.forEach(path => {
+    ctx.beginPath(); path.points.forEach((point, index) => { const p = project(point); index ? ctx.lineTo(...p) : ctx.moveTo(...p); });
+    ctx.strokeStyle = "rgba(255,129,68,.72)"; ctx.lineWidth = 1.4; ctx.stroke();
+    const arrival = project(path.points.at(-1)); ctx.fillStyle = "#ff7540"; ctx.beginPath(); ctx.arc(...arrival, 2.5, 0, Math.PI * 2); ctx.fill();
+  });
+  stress.observations.forEach(observation => { const p = project([observation.x, observation.y]); ctx.fillStyle = "#f7ec78"; ctx.strokeStyle = palette.background; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(...p, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); });
+  const reservoir = project([stress.reservoirX, stress.reservoirY]); ctx.fillStyle = "#ff4566"; ctx.beginPath(); ctx.arc(...reservoir, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = palette.text; ctx.font = "9px ui-monospace"; ctx.fillText("● reservoir   ● predicted arrival   ● observed vent", 40, height - 12);
+}
+
+function drawStress3D() {
+  const surface = stressCanvas(stress3DCanvas); if (!surface) return;
+  const { ctx, width, height, palette } = surface; const stress = ensureStress();
+  const cx = width * .5; const baseY = height * .46; const spanX = Math.max(1, state.settings.xMax - state.settings.xMin); const spanY = Math.max(1, state.settings.yMax - state.settings.yMin); const maxDepth = Math.max(1, stress.reservoirDepthKm * 1.25);
+  const project = ([x, y, depth]) => { const nx = (x - state.settings.xMin) / spanX - .5; const ny = (y - state.settings.yMin) / spanY - .5; return [cx + (nx - ny) * width * .48, baseY + (nx + ny) * height * .14 + depth / maxDepth * height * .34]; };
+  ctx.strokeStyle = palette.grid; ctx.fillStyle = state.appearance.theme === "light" ? "rgba(205,222,224,.45)" : "rgba(32,53,61,.55)"; ctx.beginPath();
+  [[state.settings.xMin,state.settings.yMin,0],[state.settings.xMax,state.settings.yMin,0],[state.settings.xMax,state.settings.yMax,0],[state.settings.xMin,state.settings.yMax,0]].map(project).forEach((point,index) => index ? ctx.lineTo(...point) : ctx.moveTo(...point)); ctx.closePath(); ctx.fill(); ctx.stroke();
+  stress.paths.forEach((path,index) => { ctx.beginPath(); path.points.forEach((point,i) => { const p=project(point); i?ctx.lineTo(...p):ctx.moveTo(...p); }); ctx.strokeStyle = `hsla(${12 + index / Math.max(1,stress.paths.length) * 42},90%,62%,.78)`; ctx.lineWidth=1.6; ctx.stroke(); });
+  const source = project([stress.reservoirX,stress.reservoirY,stress.reservoirDepthKm]); ctx.fillStyle="#ff4566"; ctx.beginPath(); ctx.arc(...source,8,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=palette.muted; ctx.font="9px ui-monospace"; ctx.fillText(`${stress.paths.length} trajectories · depth ${stress.reservoirDepthKm} km`,18,height-14);
+}
+
+function drawStressSection() {
+  const surface = stressCanvas(stressSectionCanvas); if (!surface) return;
+  const { ctx,width,height,palette }=surface; const stress=ensureStress(); const pad={left:42,right:20,top:38,bottom:30}; const maxDepth=Math.max(10,stress.reservoirDepthKm*1.35);
+  const px=x=>pad.left+(x-state.settings.xMin)/Math.max(1,state.settings.xMax-state.settings.xMin)*(width-pad.left-pad.right); const py=d=>pad.top+d/maxDepth*(height-pad.top-pad.bottom);
+  ctx.strokeStyle=palette.grid; for(let i=0;i<=5;i++){const y=py(maxDepth*i/5);ctx.beginPath();ctx.moveTo(pad.left,y);ctx.lineTo(width-pad.right,y);ctx.stroke();ctx.fillStyle=palette.muted;ctx.font="8px ui-monospace";ctx.fillText(`${(maxDepth*i/5).toFixed(1)} km`,4,y+3);}
+  ctx.beginPath(); for(let i=0;i<=80;i++){const x=state.settings.xMin+(state.settings.xMax-state.settings.xMin)*i/80;const elev=sampleTopographyValue([x,stress.reservoirY])/1000;const p=[px(x),py(-elev)];i?ctx.lineTo(...p):ctx.moveTo(...p);} ctx.strokeStyle="#83d49a";ctx.lineWidth=2;ctx.stroke();
+  stress.paths.forEach(path=>{ctx.beginPath();path.points.forEach((point,i)=>{const p=[px(point[0]),py(point[2])];i?ctx.lineTo(...p):ctx.moveTo(...p);});ctx.strokeStyle="rgba(255,123,65,.72)";ctx.lineWidth=1.5;ctx.stroke();});
+  ctx.fillStyle="#ff4566";ctx.beginPath();ctx.arc(px(stress.reservoirX),py(stress.reservoirDepthKm),7,0,Math.PI*2);ctx.fill();
+}
+
+function drawStressComparison() {
+  const surface=stressCanvas(stressCompareCanvas); if(!surface)return; const {ctx,width,height,palette}=surface; const stress=ensureStress(); const arrivals=stress.paths.filter(path=>path.reachedSurface).map(path=>path.points.at(-1));
+  const project=stressProjector(width*.55,height,34); drawStressGrid(ctx,width*.55,height,project);
+  stress.observations.forEach(observation=>{const p=project([observation.x,observation.y]);ctx.fillStyle="#f7ec78";ctx.beginPath();ctx.arc(...p,4,0,Math.PI*2);ctx.fill();if(arrivals.length){const nearest=arrivals.reduce((best,item)=>Math.hypot(item[0]-observation.x,item[1]-observation.y)<Math.hypot(best[0]-observation.x,best[1]-observation.y)?item:best,arrivals[0]);const q=project(nearest);ctx.strokeStyle="rgba(247,236,120,.35)";ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.stroke();}});
+  arrivals.forEach(item=>{const p=project(item);ctx.strokeStyle="#ff7540";ctx.lineWidth=2;ctx.beginPath();ctx.arc(...p,4,0,Math.PI*2);ctx.stroke();});
+  const x=width*.61; ctx.fillStyle=palette.text;ctx.font="700 14px ui-monospace";ctx.fillText("VENT FIT",x,55);ctx.font="700 30px ui-monospace";ctx.fillStyle="#ffad68";ctx.fillText(stress.metrics?.rms==null?"—":stress.metrics.rms.toFixed(2),x,105);ctx.font="9px ui-monospace";ctx.fillStyle=palette.muted;ctx.fillText(`RMS distance ${stress.metrics?.unit||"km"}`,x,122);ctx.fillText(`${stress.metrics?.reached||0}/${stress.paths.length} paths reached surface`,x,150);ctx.fillText(`${stress.observations.length} observed vents`,x,168);
+  const principal=stressPrincipal(stress);ctx.fillText(`σ1 ${principal.sigma1.toFixed(2)} MPa`,x,210);ctx.fillText(`σ3 ${principal.sigma3.toFixed(2)} MPa`,x,228);ctx.fillText(`azimuth ${(principal.angle*180/Math.PI).toFixed(1)}°`,x,246);
+}
+
+function renderStressWorkspace(){const dialog=document.querySelector("#stress-workspace");if(!dialog?.open)return;drawStressMap();drawStress3D();drawStressSection();drawStressComparison();syncStressUI();}
+
+function syncStressUI(){const stress=ensureStress();const values={"stress-sxx":stress.sxx,"stress-syy":stress.syy,"stress-sxy":stress.sxy,"stress-topographic-load":stress.topographicLoad,"stress-reservoir-depth":stress.reservoirDepthKm,"stress-path-count":stress.pathCount,"stress-rock-density":stress.rockDensity,"stress-magma-density":stress.magmaDensity,"stress-field":stress.field,"stress-workspace-field":stress.field,"stress-workspace-young":stress.youngModulus,"stress-workspace-poisson":stress.poissonRatio,"stress-reservoir-x":stress.reservoirX,"stress-reservoir-y":stress.reservoirY,"stress-reservoir-pressure":stress.reservoirPressure,"stress-path-steps":stress.pathSteps};Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(input&&document.activeElement!==input)input.value=value;});document.querySelector("#stress-observation-count").textContent=stress.observations.length;document.querySelector("#stress-path-total").textContent=stress.paths.length;document.querySelector("#stress-reached-count").textContent=stress.metrics?.reached||0;document.querySelector("#stress-rms-misfit").textContent=stress.metrics?.rms==null?"—":`${stress.metrics.rms.toFixed(2)}${stress.metrics.unit}`;document.querySelector("#stress-import-status").textContent=stress.observations.length?`${stress.observations.length} observations loaded · ${stress.metrics?.rms==null?"generate paths to compare":`RMS ${stress.metrics.rms.toFixed(2)} ${stress.metrics.unit}`}`:"GIS-ready: GeoJSON, CSV/TSV/XYZ, WKT, KML and GPX point observations.";}
+
+function parseStressObservations(text,name="data"){
+  const lower=name.toLowerCase(); const output=[];
+  if(lower.endsWith(".json")||lower.endsWith(".geojson")){const data=JSON.parse(text);const geometries=data.type==="FeatureCollection"?data.features.map(feature=>feature.geometry):[data.geometry||data];geometries.forEach(geometry=>{if(geometry?.type==="Point")output.push(geometry.coordinates);else if(geometry?.type==="MultiPoint"||geometry?.type==="LineString")output.push(...geometry.coordinates);});}
+  else if(lower.endsWith(".kml")){for(const match of text.matchAll(/<coordinates>\s*([^<]+)<\/coordinates>/gi))match[1].trim().split(/\s+/).forEach(value=>output.push(value.split(",").slice(0,2).map(Number)));}
+  else if(lower.endsWith(".gpx")){for(const match of text.matchAll(/<(?:wpt|trkpt)[^>]*lat=["']([^"']+)["'][^>]*lon=["']([^"']+)["']/gi))output.push([Number(match[2]),Number(match[1])]);}
+  else if(lower.endsWith(".wkt")||/POINT\s*\(/i.test(text)){for(const match of text.matchAll(/POINT\s*(?:Z\s*)?\(\s*([-+\d.e]+)\s+([-+\d.e]+)/gi))output.push([Number(match[1]),Number(match[2])]);}
+  else text.split(/\r?\n/).forEach(line=>{const values=line.trim().split(/[,;\t ]+/).slice(0,2).map(Number);if(values.every(Number.isFinite))output.push(values);});
+  return output.filter(point=>point.length>=2&&point.slice(0,2).every(Number.isFinite)).map((point,index)=>({id:`vent-${index+1}`,x:Number(point[0]),y:Number(point[1])}));
+}
+
+function stressGeoJson(){const stress=ensureStress();return {type:"FeatureCollection",name:"Visual Builder stress and dyke results",features:[...stress.observations.map(item=>({type:"Feature",properties:{kind:"observed vent",source:"user import"},geometry:{type:"Point",coordinates:[item.x,item.y]}})),...stress.paths.map(path=>({type:"Feature",properties:{kind:"predicted dyke path",reached_surface:path.reachedSurface,method:stress.source},geometry:{type:"LineString",coordinates:path.points.map(point=>[point[0],point[1],-point[2]*1000])}}))]};}
+
+async function exportStressScreenshot(){try{renderStressWorkspace();const grid=document.querySelector("#stress-workspace-grid");const image=composeCanvasLayout([{source:stressMapCanvas,label:"Stress map"},{source:stress3DCanvas,label:"3D dyke paths"},{source:stressSectionCanvas,label:"Depth section"},{source:stressCompareCanvas,label:"Vent comparison"}],grid);downloadBlob(screenshotName(`gwb-stress-dykes-${grid.dataset.layout}`),await canvasToPngBlob(image));showToast("Stress & Dykes workspace PNG saved");}catch{showToast("Stress workspace screenshot could not be encoded");}}
+
+function availableStatisticsSource(requested="auto") {
+  if(requested!=="auto")return requested;
+  const stress=ensureStress();if(stress.observations.length&&stress.paths.length)return"dyke";
+  const gravity=ensureGravity();if(gravity.observations.length)return"gravity";
+  if(state.topography?.values?.length===state.topography?.width*state.topography?.height)return"topography";
+  if(state.tomography?.grid?.values?.length)return"tomography";
+  return"dyke";
+}
+
+function scaleDistanceSummary(summary,scale){return Object.fromEntries(Object.entries(summary).map(([key,value])=>[key,key==="count"?value:Number.isFinite(value)?value*scale:value]));}
+function statisticValue(value,digits=3){return Number.isFinite(value)?Number(value).toFixed(digits):"—";}
+function gridValueAtPoint(result,point){const{xMin,xMax,yMin,yMax}=state.settings;const column=Math.max(0,Math.min(result.nx-1,Math.floor((point.x-xMin)/Math.max(Number.EPSILON,xMax-xMin)*result.nx)));const row=Math.max(0,Math.min(result.ny-1,Math.floor((yMax-point.y)/Math.max(Number.EPSILON,yMax-yMin)*result.ny)));return result.values[row*result.nx+column];}
+
+function runStatisticsAnalysis(){
+  const requested=document.querySelector("#statistics-source").value;const source=availableStatisticsSource(requested);const tolerance=Number(document.querySelector("#statistics-tolerance").value)||0;const connectivity=Number(document.querySelector("#statistics-connectivity").value)||4;
+  if(source==="dyke"){
+    const stress=ensureStress();if(!stress.paths.length)generateDykePaths();const arrivals=stress.paths.filter(path=>path.reachedSurface).map(path=>path.points.at(-1));const scale=state.settings.coordinateSystem==="spherical"?1:1/1000;const raw=pointPatternMisfit(arrivals,stress.observations,tolerance/scale);statisticsResult={source,unit:state.settings.coordinateSystem==="spherical"?"°":"km",arrivals,observations:stress.observations,fit:{...raw,observation:scaleDistanceSummary(raw.observation,scale),prediction:scaleDistanceSummary(raw.prediction,scale),symmetricMean:Number.isFinite(raw.symmetricMean)?raw.symmetricMean*scale:null,tolerance}};
+  }else if(source==="gravity"){
+    const gravity=ensureGravity();const grid=computeGravityPreview();const observations=gravity.observations;const observed=[];const predicted=[];const points=[];observations.forEach(item=>{const value=gridValueAtPoint(grid,item);if(!Number.isFinite(value)||!Number.isFinite(Number(item.value)))return;const model=gravity.field==="residual"?Number(item.value)-value:value;observed.push(Number(item.value));predicted.push(model);points.push({...item,predicted:model,residual:model-Number(item.value)});});statisticsResult={source,unit:grid.unit,grid,observed,predicted,points,fit:pairedStatistics(observed,predicted)};
+  }else{
+    const grid=source==="topography"?{values:state.topography?.values||[],nx:Number(state.topography?.width)||0,ny:Number(state.topography?.height)||0,unit:"m"}:{...(state.tomography?.grid||{}),nx:Number(state.tomography?.grid?.nx||state.tomography?.grid?.width)||0,ny:Number(state.tomography?.grid?.ny||state.tomography?.grid?.height)||0,unit:"%"};const values=(grid.values||[]).map(value=>source==="tomography"?tomographyScalarValue(value):Number(value));statisticsResult={source,unit:grid.unit,grid:{...grid,values},fit:moransI(values,grid.nx,grid.ny,connectivity)};
+  }
+  renderStatisticsWorkspace();showToast("Statistical analysis updated");return statisticsResult;
+}
+
+function statisticsMetricCards(){
+  if(!statisticsResult)return[];const r=statisticsResult;
+  if(r.source==="dyke")return[["Vent coverage",statisticValue(r.fit.recall*100,1)+"%",`${r.fit.observedCount} observations`],["Prediction precision",statisticValue(r.fit.precision*100,1)+"%",`${r.fit.predictedCount} arrivals`],["Vent → path RMS",statisticValue(r.fit.observation.rmse,2),r.unit],["Path → vent RMS",statisticValue(r.fit.prediction.rmse,2),r.unit],["Symmetric mean",statisticValue(r.fit.symmetricMean,2),r.unit],["95th percentile",statisticValue(r.fit.observation.p95,2),r.unit]];
+  if(r.source==="gravity")return[["Samples",r.fit.count,"paired"],["Bias",statisticValue(r.fit.bias,2),r.unit],["MAE",statisticValue(r.fit.mae,2),r.unit],["RMSE",statisticValue(r.fit.rmse,2),r.unit],["Pearson r",statisticValue(r.fit.pearson),"linear association"],["R²",statisticValue(r.fit.r2),"agreement"]];
+  return[["Cells",r.fit.count,"finite"],["Moran’s I",statisticValue(r.fit.value),"spatial autocorrelation"],["Random expectation",statisticValue(r.fit.expected),"E[I]"],["Neighbour links",r.fit.weights,"directed weights"],["Pattern",r.fit.value==null?"—":r.fit.value>r.fit.expected?"clustered":"dispersed","relative to random"],["Connectivity",document.querySelector("#statistics-connectivity").value,"neighbours"]];
+}
+
+function drawStatisticsMap(){
+  const surface=stressCanvas(statisticsMapCanvas);if(!surface||!statisticsResult)return;const{ctx,width,height,palette}=surface;const r=statisticsResult;
+  if(r.source==="dyke"){
+    const project=stressProjector(width,height,42);drawStressGrid(ctx,width,height,project);drawStressFeatures(ctx,project);r.arrivals.forEach(point=>{const p=project(point);ctx.strokeStyle="#ff7540";ctx.lineWidth=2;ctx.beginPath();ctx.arc(...p,5,0,Math.PI*2);ctx.stroke();});r.observations.forEach(observation=>{const p=project([observation.x,observation.y]);ctx.fillStyle="#f7ec78";ctx.beginPath();ctx.arc(...p,4,0,Math.PI*2);ctx.fill();if(r.arrivals.length){const nearest=r.arrivals.reduce((best,item)=>Math.hypot(item[0]-observation.x,item[1]-observation.y)<Math.hypot(best[0]-observation.x,best[1]-observation.y)?item:best,r.arrivals[0]);const q=project(nearest);ctx.strokeStyle="rgba(247,236,120,.4)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.stroke();}});ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText("● observed vent   ○ predicted arrival   — nearest match",42,height-15);
+  }else if(r.source==="gravity"){
+    const project=stressProjector(width,height,42);drawStressGrid(ctx,width,height,project);const limit=Math.max(1,...r.points.map(point=>Math.abs(point.residual)));r.points.forEach(point=>{const p=project([point.x,point.y]);ctx.fillStyle=gravityColor(point.residual,limit,.95);ctx.beginPath();ctx.arc(...p,6,0,Math.PI*2);ctx.fill();ctx.strokeStyle=palette.background;ctx.stroke();});ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText(`${r.points.length} paired observations · colour = model − observation`,42,height-15);
+  }else{
+    const{grid}=r;const values=grid.values.filter(Number.isFinite);const min=values.length?Math.min(...values):0,max=values.length?Math.max(...values):1;const pad=36,cw=(width-pad*2)/Math.max(1,grid.nx),ch=(height-pad*2)/Math.max(1,grid.ny);grid.values.forEach((value,index)=>{if(!Number.isFinite(value))return;const col=index%grid.nx,row=Math.floor(index/grid.nx);const amount=(value-min)/Math.max(Number.EPSILON,max-min);ctx.fillStyle=`rgb(${scalarRgb(r.source==="topography"?"topography":"tomography",min+amount*(max-min),min,max).join(",")})`;ctx.fillRect(pad+col*cw,pad+row*ch,cw+1,ch+1);});ctx.strokeStyle=palette.border;ctx.strokeRect(pad,pad,width-pad*2,height-pad*2);ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText(`${statisticValue(min,2)} to ${statisticValue(max,2)} ${r.unit}`,pad,height-14);
+  }
+}
+
+function drawStatisticsChart(){
+  const surface=stressCanvas(statisticsChartCanvas);if(!surface||!statisticsResult)return;const{ctx,width,height,palette}=surface;const r=statisticsResult;const pad={left:48,right:24,top:46,bottom:38};ctx.strokeStyle=palette.grid;ctx.strokeRect(pad.left,pad.top,width-pad.left-pad.right,height-pad.top-pad.bottom);
+  if(r.source==="gravity"){
+    if(!r.observed.length)return;const values=[...r.observed,...r.predicted];const min=Math.min(...values),max=Math.max(...values),span=Math.max(1,max-min);ctx.strokeStyle="#62cbd2";ctx.beginPath();ctx.moveTo(pad.left,height-pad.bottom);ctx.lineTo(width-pad.right,pad.top);ctx.stroke();r.observed.forEach((value,index)=>{const x=pad.left+(value-min)/span*(width-pad.left-pad.right),y=height-pad.bottom-(r.predicted[index]-min)/span*(height-pad.top-pad.bottom);ctx.fillStyle="#ff8b57";ctx.beginPath();ctx.arc(x,y,3.5,0,Math.PI*2);ctx.fill();});ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText("Observed",width/2-22,height-12);ctx.save();ctx.translate(13,height/2+25);ctx.rotate(-Math.PI/2);ctx.fillText("Modelled",0,0);ctx.restore();
+  }else if(r.source==="dyke"){
+    const values=[...(r.fit.observation.count?r.fit.observationDistances||[]:[])];const distances=r.observations.map(observation=>r.arrivals.length?Math.min(...r.arrivals.map(point=>Math.hypot(point[0]-observation.x,point[1]-observation.y)))*(state.settings.coordinateSystem==="spherical"?1:1/1000):null).filter(Number.isFinite);const max=Math.max(r.fit.tolerance,...distances,1);const bins=12,counts=Array(bins).fill(0);distances.forEach(value=>counts[Math.min(bins-1,Math.floor(value/max*bins))]++);const peak=Math.max(1,...counts);counts.forEach((count,index)=>{const x=pad.left+index/bins*(width-pad.left-pad.right),bar=(height-pad.top-pad.bottom)*count/peak;ctx.fillStyle="#ff8b57";ctx.fillRect(x,height-pad.bottom-bar,(width-pad.left-pad.right)/bins-2,bar);});const tx=pad.left+r.fit.tolerance/max*(width-pad.left-pad.right);ctx.strokeStyle="#f7ec78";ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(tx,pad.top);ctx.lineTo(tx,height-pad.bottom);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText(`Vent-to-path distance (${r.unit})`,pad.left,height-12);
+  }else{
+    const expected=r.fit.expected??0,value=r.fit.value??0,min=Math.min(-1,expected,value),max=Math.max(1,expected,value),axis=v=>pad.left+(v-min)/(max-min)*(width-pad.left-pad.right);const y=height/2;ctx.strokeStyle=palette.grid;ctx.beginPath();ctx.moveTo(pad.left,y);ctx.lineTo(width-pad.right,y);ctx.stroke();ctx.strokeStyle="#8fa0a6";ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(axis(expected),pad.top);ctx.lineTo(axis(expected),height-pad.bottom);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle="#62cbd2";ctx.fillRect(Math.min(axis(0),axis(value)),y-18,Math.abs(axis(value)-axis(0)),36);ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText(`Moran’s I ${statisticValue(value)} · expected ${statisticValue(expected)}`,pad.left,height-12);
+  }
+}
+
+function renderStatisticsWorkspace(){const dialog=document.querySelector("#statistics-workspace");if(!dialog?.open)return;const metrics=document.querySelector("#statistics-metrics");metrics.innerHTML=statisticsMetricCards().map(([label,value,note])=>`<div class="statistics-metric"><small>${label}</small><strong>${value}</strong><span>${note}</span></div>`).join("")||`<div class="statistics-metric"><small>READY</small><strong>—</strong><span>Run an analysis</span></div>`;const source=statisticsResult?.source||availableStatisticsSource(document.querySelector("#statistics-source").value);const gridAnalysis=source==="topography"||source==="tomography";document.querySelector("#statistics-tolerance-row").classList.toggle("hidden",source!=="dyke");document.querySelector("#statistics-connectivity-row").classList.toggle("hidden",!gridAnalysis);document.querySelector("#statistics-settings-note").textContent=source==="dyke"?"Matching is bidirectional: observation coverage and prediction precision are reported separately.":source==="gravity"?"Observed values are paired with the nearest model-grid sample at the same location.":"Moran’s I uses equal-weight neighbouring cells and ignores non-finite values.";document.querySelector("#statistics-data-status").textContent=source==="dyke"?`${ensureStress().paths.length} predicted paths · ${ensureStress().observations.length} observed vents`:source==="gravity"?`${ensureGravity().observations.length} gravity observations · ${ensureGravity().field} field`:source==="topography"?`${state.topography?.width||0} × ${state.topography?.height||0} elevation grid`: `${state.tomography?.grid?.nx||0} × ${state.tomography?.grid?.ny||0} tomography grid`;document.querySelector("#statistics-tolerance-unit").textContent=state.settings.coordinateSystem==="spherical"?"°":"km";document.querySelector("#statistics-map-title").textContent=source==="dyke"?"Dyke arrivals and observed vents":source==="gravity"?"Gravity residuals at observations":`${source[0].toUpperCase()+source.slice(1)} field`;document.querySelector("#statistics-chart-title").textContent=source==="gravity"?"Observed versus modelled":source==="dyke"?"Nearest-distance distribution":"Global spatial autocorrelation";drawStatisticsMap();drawStatisticsChart();}
+
+function statisticsCsv(){if(!statisticsResult)return"";const rows=["metric,value,unit"];statisticsMetricCards().forEach(([label,value,note])=>rows.push([JSON.stringify(label),value,JSON.stringify(note)].join(",")));return`${rows.join("\n")}\n`;}
+
+function ensureThermalConduction(){state.thermalConduction={...DEFAULT_THERMAL_CONDUCTION,...(state.thermalConduction||{})};return state.thermalConduction;}
+
+function thermalMaterialFields(config){
+  const nx=Math.max(12,Math.round(config.nx));const nz=Math.max(12,Math.round(config.nz));const size=nx*nz;
+  const conductivity=new Float64Array(size).fill(Number(config.conductivity));const heatProduction=new Float64Array(size).fill(Number(config.heatProduction));const density=new Float64Array(size).fill(Number(config.density));const heatCapacity=new Float64Array(size).fill(Number(config.heatCapacity));
+  if(!config.useFeatures)return{conductivity,heatProduction,density,heatCapacity};
+  const presets={"continental plate":[2.5,1.2e-6,2800],"oceanic plate":[3.1,.2e-6,2900],"mantle layer":[3.5,.02e-6,3300],plume:[2.7,.02e-6,3200],"subducting plate":[3,.15e-6,3000],fault:[2.3,.5e-6,2700]};
+  const depth=Math.max(1,state.settings.zMax-state.settings.zMin);const width=Math.max(1,state.settings.xMax-state.settings.xMin);
+  state.features.filter(featureVisible).forEach(feature=>{
+    const xs=feature.points.map(point=>point[0]);const left=Math.min(...xs);const right=Math.max(...xs);const radius=FEATURE_TYPES[feature.model].geometry==="point"?Number(feature.semiMajorAxis||width*.04):0;
+    const [k,h,rho]=presets[feature.model]||[config.conductivity,config.heatProduction,config.density];
+    for(let iz=0;iz<nz;iz++){const z=state.settings.zMin+depth*iz/(nz-1);if(z<Number(feature.minDepth||0)||z>Number(feature.maxDepth||depth))continue;for(let ix=0;ix<nx;ix++){const x=state.settings.xMin+width*ix/(nx-1);if(x<left-radius||x>right+radius)continue;const index=iz*nx+ix;const relativeDepth=z-Number(feature.minDepth||0);const localHeat=feature.model==="continental plate"&&relativeDepth>40000?0.02e-6:feature.model==="oceanic plate"&&relativeDepth>12000?0.02e-6:h;conductivity[index]=k;heatProduction[index]=localHeat;density[index]=rho;const layer=feature.layers?.find(item=>z>=Number(item.minDepth)&&z<=Number(item.maxDepth));if(layer?.density)density[index]=Number(layer.density);}}
+  });
+  return{conductivity,heatProduction,density,heatCapacity};
+}
+
+function solveThermalConductionModel(){
+  const config=ensureThermalConduction();const progress=document.querySelector("#thermal-progress");progress.value=8;document.querySelector("#thermal-conduction-status").textContent="Solving conductive heat equation…";
+  const fields=thermalMaterialFields(config);const options={...config,...fields,width:Math.max(1,state.settings.xMax-state.settings.xMin),depth:Math.max(1,state.settings.zMax-state.settings.zMin),bottomHeatFlux:Number(config.bottomHeatFlux),timeYears:Number(config.timeMyr)*1e6,maxIterations:7000,tolerance:1e-3};
+  thermalConductionResult=config.mode==="transient"?solveTransientConduction(options):solveSteadyConduction(options);progress.value=100;persist();syncThermalConductionUI();renderThermalWorkspace();
+  const message=config.mode==="steady"?`${thermalConductionResult.converged?"Converged":"Iteration limit"} · ${thermalConductionResult.iterations} iterations · residual ${thermalConductionResult.residual.toExponential(2)} K`:`Transient solution · ${config.timeMyr} Myr · ${thermalConductionResult.iterations} stable steps`;
+  document.querySelector("#thermal-conduction-status").textContent=message;document.querySelector("#thermal-convergence").textContent=message;showToast("Conductive temperature field computed");return thermalConductionResult;
+}
+
+function thermalResultRange(){if(!thermalConductionResult)return[273,1573];let min=Infinity,max=-Infinity;thermalConductionResult.temperature.forEach(value=>{min=Math.min(min,value);max=Math.max(max,value);});return[min,max];}
+function thermalResultColor(value,min,max){const amount=Math.max(0,Math.min(1,(value-min)/Math.max(1,max-min)));const hue=245-245*Math.pow(amount,.75);return `hsl(${hue} 88% ${38+amount*26}%)`;}
+
+function drawThermalSection(){const surface=stressCanvas(thermalSectionCanvas);if(!surface||!thermalConductionResult)return;const{ctx,width,height,palette}=surface;const result=thermalConductionResult;const[min,max]=thermalResultRange();const pad={left:44,right:18,top:36,bottom:28};const cw=(width-pad.left-pad.right)/result.nx,ch=(height-pad.top-pad.bottom)/result.nz;for(let iz=0;iz<result.nz;iz++)for(let ix=0;ix<result.nx;ix++){ctx.fillStyle=thermalResultColor(result.temperature[iz*result.nx+ix],min,max);ctx.fillRect(pad.left+ix*cw,pad.top+iz*ch,cw+1,ch+1);}ctx.strokeStyle=palette.border;ctx.strokeRect(pad.left,pad.top,width-pad.left-pad.right,height-pad.top-pad.bottom);ctx.fillStyle=palette.text;ctx.font="8px ui-monospace";for(let i=0;i<=5;i++){const y=pad.top+(height-pad.top-pad.bottom)*i/5;ctx.fillText(`${((state.settings.zMax-state.settings.zMin)/1000*i/5).toFixed(0)} km`,4,y+3);}for(let i=1;i<8;i++){const value=min+(max-min)*i/8;ctx.strokeStyle="rgba(255,255,255,.22)";ctx.beginPath();for(let ix=0;ix<result.nx;ix++){let closest=0,difference=Infinity;for(let iz=0;iz<result.nz;iz++){const delta=Math.abs(result.temperature[iz*result.nx+ix]-value);if(delta<difference){difference=delta;closest=iz;}}const x=pad.left+(ix+.5)*cw,y=pad.top+(closest+.5)*ch;ix?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}}
+
+function drawThermalMap(){const surface=stressCanvas(thermalMapCanvas);if(!surface||!thermalConductionResult)return;const{ctx,width,height,palette}=surface;const result=thermalConductionResult;const[min,max]=thermalResultRange();const depth=Math.max(0,Math.min(state.settings.zMax-state.settings.zMin,ensureThermalConduction().mapDepthKm*1000));const iz=Math.round(depth/Math.max(1,state.settings.zMax-state.settings.zMin)*(result.nz-1));const project=stressProjector(width,height);drawStressGrid(ctx,width,height,project);for(let ix=0;ix<result.nx;ix++){const x0=38+(width-76)*ix/result.nx;ctx.fillStyle=thermalResultColor(result.temperature[iz*result.nx+ix],min,max);ctx.globalAlpha=.76;ctx.fillRect(x0,38,(width-76)/result.nx+1,height-76);}ctx.globalAlpha=1;drawStressFeatures(ctx,project);ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText(`${ensureThermalConduction().mapDepthKm} km · section solution extruded across Y`,42,height-14);}
+
+function drawThermalProfile(){const surface=stressCanvas(thermalProfileCanvas);if(!surface||!thermalConductionResult)return;const{ctx,width,height,palette}=surface;const result=thermalConductionResult;const[min,max]=thermalResultRange();const pad={left:46,right:24,top:38,bottom:32};ctx.strokeStyle=palette.grid;for(let i=0;i<=5;i++){const y=pad.top+(height-pad.top-pad.bottom)*i/5;ctx.beginPath();ctx.moveTo(pad.left,y);ctx.lineTo(width-pad.right,y);ctx.stroke();ctx.fillStyle=palette.muted;ctx.font="8px ui-monospace";ctx.fillText(`${((state.settings.zMax-state.settings.zMin)/1000*i/5).toFixed(0)} km`,4,y+3);}const colors=["#42c6ff","#ffd45b","#ff6545"],columns=[Math.round(result.nx*.25),Math.round(result.nx*.5),Math.round(result.nx*.75)];columns.forEach((column,index)=>{ctx.beginPath();for(let iz=0;iz<result.nz;iz++){const temperature=result.temperature[iz*result.nx+column];const x=pad.left+(temperature-min)/Math.max(1,max-min)*(width-pad.left-pad.right),y=pad.top+iz/(result.nz-1)*(height-pad.top-pad.bottom);iz?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.strokeStyle=colors[index];ctx.lineWidth=2;ctx.stroke();});ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText(`${min.toFixed(0)} K`,pad.left,height-10);ctx.fillText(`${max.toFixed(0)} K`,width-pad.right-42,height-10);ctx.fillText("X 25%   X 50%   X 75%",pad.left+8,pad.top-12);}
+
+function renderThermalWorkspace(){const dialog=document.querySelector("#thermal-workspace");if(!dialog?.open)return;drawThermalMap();drawThermalSection();drawThermalProfile();}
+function syncThermalConductionUI(){const config=ensureThermalConduction();const values={"thermal-mode":config.mode,"thermal-top-temperature":config.topTemperature,"thermal-bottom-temperature":config.bottomTemperature,"thermal-conductivity":config.conductivity,"thermal-heat-production":config.heatProduction*1e6,"thermal-use-features":config.useFeatures,"thermal-bottom-mode":config.bottomMode,"thermal-bottom-flux":config.bottomHeatFlux*1000,"thermal-time-myr":config.timeMyr,"thermal-density":config.density,"thermal-heat-capacity":config.heatCapacity,"thermal-nx":config.nx,"thermal-nz":config.nz,"thermal-map-depth":config.mapDepthKm};Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(!input||document.activeElement===input)return;if(input.type==="checkbox")input.checked=Boolean(value);else input.value=value;});const range=document.querySelector("#thermal-temperature-range");if(thermalConductionResult){const[min,max]=thermalResultRange();range.textContent=`${min.toFixed(0)}–${max.toFixed(0)} K`;}else range.textContent="Not solved";}
+function thermalCsv(){if(!thermalConductionResult)return"";const rows=["x_m,depth_m,temperature_K,conductivity_W_mK,heat_production_W_m3"];const r=thermalConductionResult;for(let iz=0;iz<r.nz;iz++)for(let ix=0;ix<r.nx;ix++){const i=iz*r.nx+ix;rows.push([state.settings.xMin+r.width*ix/(r.nx-1),r.depth*iz/(r.nz-1),r.temperature[i],r.conductivity[i],r.heatProduction[i]].join(","));}return`${rows.join("\n")}\n`;}
+async function exportThermalScreenshot(){try{renderThermalWorkspace();const grid=document.querySelector("#thermal-workspace-grid");const image=composeCanvasLayout([{source:thermalMapCanvas,label:"Temperature map"},{source:thermalSectionCanvas,label:"Conductive section"},{source:thermalProfileCanvas,label:"Geotherm"}],grid);downloadBlob(screenshotName(`gwb-thermal-conduction-${grid.dataset.layout}`),await canvasToPngBlob(image));showToast("Thermal workspace PNG saved");}catch{showToast("Thermal screenshot could not be encoded");}}
 
 function hitFeature(point) {
   const [x, y] = point;
@@ -5181,6 +5697,7 @@ function syncCompositionCount() {
 function bindLayerEditor(panel, feature) {
   panel.querySelector("#apply-layer-preset")?.addEventListener("click", () => {
     feature.layers = geologicalLayerPreset(feature);
+    delete feature.sectionLayerDepthProfiles;
     feature.maxDepth = Math.max(...feature.layers.map(layer => Number(layer.maxDepth)));
     feature.densityEnabled = true;
     feature.densityEdited = true;
@@ -5202,6 +5719,7 @@ function bindLayerEditor(panel, feature) {
       temperature: Number(feature.temperature),
       density: Number(feature.referenceDensity || 3300)
     }));
+    delete feature.sectionLayerDepthProfiles;
     feature.layersEdited = true;
     feature.layerMode = "count";
     selectedSectionLayer = { featureId: feature.id, layerIndex: 0 };
@@ -5221,23 +5739,24 @@ function bindLayerEditor(panel, feature) {
       temperature: Number(feature.temperature),
       density: Number(feature.referenceDensity || 3300)
     }];
+    delete feature.sectionLayerDepthProfiles;
     feature.layersEdited = true;
-    if (key === "density") {
-      feature.densityEnabled = true;
-      feature.densityEdited = true;
-    }
+    feature.densityEnabled = true;
+    feature.densityEdited = true;
     feature.layerMode = "depths";
     syncCompositionCount();
     updateAll();
   });
   panel.querySelector("#clear-layers")?.addEventListener("click", () => {
     feature.layers = [];
+    delete feature.sectionLayerDepthProfiles;
     feature.layersEdited = true;
     updateAll();
     showToast("Layer split removed");
   });
   panel.querySelectorAll("[data-remove-layer]").forEach(button => button.addEventListener("click", () => {
     feature.layers.splice(Number(button.dataset.removeLayer), 1);
+    delete feature.sectionLayerDepthProfiles;
     feature.layersEdited = true;
     updateAll();
   }));
@@ -5284,9 +5803,9 @@ function renderInspector() {
         : "Open Depth section, select this feature, then drag the gold upper or teal lower contour controls."}</p>
       <div class="layer-actions">
         <button id="open-section-profile" class="ghost">Open depth section</button>
-        ${feature.sectionDepthProfile ? `<button id="reset-section-profile" class="ghost">Reset uniform depth</button>` : ""}
+        ${feature.sectionDepthProfile || feature.sectionLayerDepthProfiles ? `<button id="reset-section-profile" class="ghost">Reset uniform depth</button>` : ""}
       </div>
-      <p class="layer-note">Double-click a contour to add a control. Select an interior control and press Delete to remove it. Internal layers follow the edited thickness proportionally.</p>
+      <p class="layer-note">Sublayer interfaces have gold edge nodes. Drag an interface away from its center diamond to create a local vertex automatically, or double-click it to add one. Interior vertices can be removed with Delete.</p>
     </div>` : "";
   const densityFields = `
     <div class="field-group density-editor"><h3>Density model <span class="framework-badge">GWB framework</span></h3>
@@ -5350,7 +5869,9 @@ function renderInspector() {
   });
   panel.querySelector("#reset-section-profile")?.addEventListener("click", () => {
     delete feature.sectionDepthProfile;
+    delete feature.sectionLayerDepthProfiles;
     delete feature.sectionProfileEdited;
+    delete feature.sectionLayerProfilesEdited;
     selectedSectionContour = null;
     updateAll();
     showToast("Uniform feature depth restored");
@@ -8473,6 +8994,74 @@ document.querySelector("#close-gravity").addEventListener("click", () => {
   document.querySelector("#gravity-editor").classList.add("hidden");
   document.querySelector("#toggle-gravity").setAttribute("aria-expanded", "false");
 });
+document.querySelector("#toggle-stress").addEventListener("click", () => {
+  const editor = document.querySelector("#stress-editor");
+  const willOpen = editor.classList.contains("hidden");
+  editor.classList.toggle("hidden", !willOpen);
+  document.querySelector("#toggle-stress").setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) syncStressUI();
+});
+document.querySelector("#close-stress").addEventListener("click", () => {
+  document.querySelector("#stress-editor").classList.add("hidden");
+  document.querySelector("#toggle-stress").setAttribute("aria-expanded", "false");
+});
+const stressInputKeys = {
+  "stress-sxx":"sxx","stress-syy":"syy","stress-sxy":"sxy","stress-topographic-load":"topographicLoad",
+  "stress-reservoir-depth":"reservoirDepthKm","stress-path-count":"pathCount","stress-rock-density":"rockDensity",
+  "stress-magma-density":"magmaDensity","stress-field":"field","stress-workspace-field":"field",
+  "stress-workspace-young":"youngModulus","stress-workspace-poisson":"poissonRatio","stress-reservoir-x":"reservoirX",
+  "stress-reservoir-y":"reservoirY","stress-reservoir-pressure":"reservoirPressure","stress-path-steps":"pathSteps"
+};
+Object.entries(stressInputKeys).forEach(([id,key]) => document.querySelector(`#${id}`).addEventListener("input", event => {
+  const stress=ensureStress(); stress[key]=event.target.tagName==="SELECT"?event.target.value:Number(event.target.value);
+  if (id === "stress-field") document.querySelector("#stress-workspace-field").value=stress.field;
+  if (id === "stress-workspace-field") document.querySelector("#stress-field").value=stress.field;
+  persist(); if(document.querySelector("#stress-workspace")?.open)generateDykePaths();
+}));
+document.querySelector("#generate-dyke-preview").addEventListener("click",()=>{generateDykePaths();showToast("Dyke trajectories generated from the current elastic stress field");});
+document.querySelector("#stress-run-workspace").addEventListener("click",()=>{generateDykePaths();showToast("Stress field and vent comparison recomputed");});
+document.querySelector("#load-demo-vents").addEventListener("click",()=>{
+  const stress=ensureStress(); if(!stress.paths.length)generateDykePaths();
+  const arrivals=stress.paths.filter(path=>path.reachedSurface).map(path=>path.points.at(-1));
+  const span=Math.min(state.settings.xMax-state.settings.xMin,state.settings.yMax-state.settings.yMin);
+  stress.observations=arrivals.filter((_,index)=>index%2===0).map((point,index)=>({id:`demo-vent-${index+1}`,x:point[0]+Math.sin(index*2.1)*span*.012,y:point[1]+Math.cos(index*1.7)*span*.012}));
+  generateDykePaths();showToast(`${stress.observations.length} synthetic vent observations loaded`);
+});
+document.querySelector("#stress-observation-file").addEventListener("change",async event=>{
+  const file=event.target.files?.[0];if(!file)return;
+  try{const observations=parseStressObservations(await readFileWithProgress(file,`Opening ${file.name}`),file.name);if(!observations.length)throw new Error("No point observations found in this file");ensureStress().observations=observations;generateDykePaths();showToast(`${observations.length} vents or structure vertices imported`);}catch(error){showToast(error.message||"Could not import stress observations");}finally{event.target.value="";}
+});
+document.querySelector("#open-stress-workspace").addEventListener("click",()=>{const dialog=document.querySelector("#stress-workspace");syncStressUI();if(!ensureStress().paths.length)generateDykePaths();if(!dialog.open)dialog.showModal();requestAnimationFrame(renderStressWorkspace);});
+document.querySelector("#minimize-stress-workspace").addEventListener("click",()=>minimizeSimpleWorkspace("stress-workspace","restore-stress-workspace"));
+document.querySelector("#restore-stress-workspace").addEventListener("click",()=>restoreSimpleWorkspace("stress-workspace","restore-stress-workspace",renderStressWorkspace));
+document.querySelector("#close-stress-workspace").addEventListener("click",()=>closeSimpleWorkspace("stress-workspace","restore-stress-workspace"));
+document.querySelector("#stress-workspace-layout").addEventListener("change",event=>{document.querySelector("#stress-workspace-grid").dataset.layout=event.target.value;requestAnimationFrame(renderStressWorkspace);});
+document.querySelector("#export-stress-geojson").addEventListener("click",()=>download("stress-dyke-results.geojson",`${JSON.stringify(stressGeoJson(),null,2)}\n`,"application/geo+json"));
+document.querySelector("#export-stress-screenshot").addEventListener("click",exportStressScreenshot);
+new ResizeObserver(()=>requestAnimationFrame(renderStressWorkspace)).observe(document.querySelector("#stress-workspace-grid"));
+document.querySelector("#toggle-thermal-conduction").addEventListener("click",()=>{const editor=document.querySelector("#thermal-conduction-editor");const willOpen=editor.classList.contains("hidden");editor.classList.toggle("hidden",!willOpen);document.querySelector("#toggle-thermal-conduction").setAttribute("aria-expanded",String(willOpen));if(willOpen)syncThermalConductionUI();});
+document.querySelector("#close-thermal-conduction").addEventListener("click",()=>{document.querySelector("#thermal-conduction-editor").classList.add("hidden");document.querySelector("#toggle-thermal-conduction").setAttribute("aria-expanded","false");});
+const thermalInputKeys={"thermal-mode":"mode","thermal-top-temperature":"topTemperature","thermal-bottom-temperature":"bottomTemperature","thermal-conductivity":"conductivity","thermal-heat-production":"heatProduction","thermal-bottom-mode":"bottomMode","thermal-bottom-flux":"bottomHeatFlux","thermal-time-myr":"timeMyr","thermal-density":"density","thermal-heat-capacity":"heatCapacity","thermal-nx":"nx","thermal-nz":"nz","thermal-map-depth":"mapDepthKm"};
+Object.entries(thermalInputKeys).forEach(([id,key])=>document.querySelector(`#${id}`).addEventListener("input",event=>{const config=ensureThermalConduction();let value=event.target.tagName==="SELECT"?event.target.value:Number(event.target.value);if(key==="heatProduction")value*=1e-6;if(key==="bottomHeatFlux")value*=1e-3;config[key]=value;thermalConductionResult=null;persist();syncThermalConductionUI();renderThermalWorkspace();}));
+document.querySelector("#thermal-use-features").addEventListener("change",event=>{ensureThermalConduction().useFeatures=event.target.checked;thermalConductionResult=null;persist();syncThermalConductionUI();});
+document.querySelector("#solve-thermal-preview").addEventListener("click",solveThermalConductionModel);
+document.querySelector("#thermal-workspace-solve").addEventListener("click",solveThermalConductionModel);
+document.querySelector("#open-thermal-workspace").addEventListener("click",()=>{const dialog=document.querySelector("#thermal-workspace");syncThermalConductionUI();if(!dialog.open)dialog.showModal();thermalConductionResult?requestAnimationFrame(renderThermalWorkspace):requestAnimationFrame(solveThermalConductionModel);});
+document.querySelector("#minimize-thermal-workspace").addEventListener("click",()=>minimizeSimpleWorkspace("thermal-workspace","restore-thermal-workspace"));
+document.querySelector("#restore-thermal-workspace").addEventListener("click",()=>restoreSimpleWorkspace("thermal-workspace","restore-thermal-workspace",renderThermalWorkspace));
+document.querySelector("#close-thermal-workspace").addEventListener("click",()=>closeSimpleWorkspace("thermal-workspace","restore-thermal-workspace"));
+document.querySelector("#thermal-workspace-layout").addEventListener("change",event=>{document.querySelector("#thermal-workspace-grid").dataset.layout=event.target.value;requestAnimationFrame(renderThermalWorkspace);});
+document.querySelector("#export-thermal-csv").addEventListener("click",()=>{if(!thermalConductionResult)return showToast("Solve a thermal field first");download("thermal-conduction.csv",thermalCsv(),"text/csv");});
+document.querySelector("#export-thermal-screenshot").addEventListener("click",exportThermalScreenshot);
+document.querySelector("#toggle-statistics").addEventListener("click",()=>{const dialog=document.querySelector("#statistics-workspace");document.querySelector("#toggle-statistics").setAttribute("aria-expanded","true");if(!dialog.open)dialog.showModal();requestAnimationFrame(()=>statisticsResult?renderStatisticsWorkspace():runStatisticsAnalysis());});
+document.querySelector("#run-statistics").addEventListener("click",runStatisticsAnalysis);
+document.querySelector("#statistics-source").addEventListener("change",runStatisticsAnalysis);
+document.querySelector("#statistics-connectivity").addEventListener("change",()=>{if(["topography","tomography"].includes(availableStatisticsSource(document.querySelector("#statistics-source").value)))runStatisticsAnalysis();});
+document.querySelector("#export-statistics").addEventListener("click",()=>{if(!statisticsResult)return showToast("Run a statistical analysis first");download("gwb-statistics-summary.csv",statisticsCsv(),"text/csv");});
+document.querySelector("#minimize-statistics-workspace").addEventListener("click",()=>{document.querySelector("#toggle-statistics").setAttribute("aria-expanded","false");minimizeSimpleWorkspace("statistics-workspace","restore-statistics-workspace");});
+document.querySelector("#restore-statistics-workspace").addEventListener("click",()=>{document.querySelector("#toggle-statistics").setAttribute("aria-expanded","true");restoreSimpleWorkspace("statistics-workspace","restore-statistics-workspace",renderStatisticsWorkspace);});
+document.querySelector("#close-statistics-workspace").addEventListener("click",()=>{document.querySelector("#toggle-statistics").setAttribute("aria-expanded","false");closeSimpleWorkspace("statistics-workspace","restore-statistics-workspace");});
+new ResizeObserver(()=>requestAnimationFrame(renderThermalWorkspace)).observe(document.querySelector("#thermal-workspace-grid"));
 const gravityInputKeys = {
   "gravity-field": "field", "gravity-reference-density": "referenceDensity",
   "gravity-topography-density": "topographyDensity", "gravity-samples-x": "samplesX",
@@ -8948,6 +9537,8 @@ document.querySelector("#new-project").addEventListener("click", () => {
     paleogeography: { ...DEFAULT_PALEOGEOGRAPHY },
     sceneLayers: { ...DEFAULT_SCENE_LAYERS },
     gravity: { ...DEFAULT_GRAVITY },
+    stress: { ...DEFAULT_STRESS },
+    thermalConduction: { ...DEFAULT_THERMAL_CONDUCTION },
     tomography: { ...DEFAULT_TOMOGRAPHY },
     lithosphere: { ...DEFAULT_LITHOSPHERE },
     provenance: { tomographyModelIds: [], lithosphereModelIds: [] },
@@ -9115,15 +9706,20 @@ function closeFloatingEditors() {
     ["map-editor", "toggle-map-editor"],
     ["tomography-editor", "toggle-tomography"],
     ["lithosphere-editor", "toggle-lithosphere"],
+    ["planetary-editor", "toggle-planetary"],
     ["research-editor", "toggle-research"],
     ["gravity-editor", "toggle-gravity"],
+    ["stress-editor", "toggle-stress"],
+    ["thermal-conduction-editor", "toggle-thermal-conduction"],
+    ["computation-editor", "toggle-computation"],
     ["field-calculator", "toggle-field-calculator"],
-    ["appearance-editor", "toggle-appearance"]
+    ["appearance-editor", "toggle-appearance"],
+    ["color-editor", "toggle-color-editor"]
   ].forEach(([editorId, toggleId]) => {
     document.querySelector(`#${editorId}`).classList.add("hidden");
     document.querySelector(`#${toggleId}`).setAttribute("aria-expanded", "false");
   });
-  document.querySelectorAll(".toolbar-menu[open]").forEach(menu => { menu.open = false; });
+  document.querySelectorAll(".toolbar-menu[open], .topbar-menu[open], .export-menu[open]").forEach(menu => { menu.open = false; });
 }
 
 function organizeTopographySections() {
@@ -9152,9 +9748,45 @@ function organizeTopographySections() {
   });
 }
 
+function filterWorkspaceLauncher(query = "") {
+  const launcher = document.querySelector("#workspace-launcher");
+  if (!launcher) return;
+  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  let visibleCards = 0;
+  launcher.querySelectorAll(".workspace-card").forEach(card => {
+    const haystack = `${card.textContent} ${card.dataset.workspaceSearch || ""}`.toLowerCase();
+    const visible = terms.every(term => haystack.includes(term));
+    card.classList.toggle("hidden", !visible);
+    if (visible) visibleCards += 1;
+  });
+  launcher.querySelectorAll("[data-workspace-group]").forEach(group => {
+    group.classList.toggle("hidden", !group.querySelector(".workspace-card:not(.hidden)"));
+  });
+  launcher.querySelector("#workspace-launcher-empty")?.classList.toggle("hidden", visibleCards > 0);
+}
+
+function toggleWorkspaceLauncher(force) {
+  const launcher = document.querySelector("#workspace-launcher");
+  if (!launcher) return;
+  launcher.open = typeof force === "boolean" ? force : !launcher.open;
+  if (!launcher.open) return;
+  document.querySelectorAll(".toolbar-menu").forEach(other => {
+    if (other !== launcher) other.open = false;
+  });
+  requestAnimationFrame(() => document.querySelector("#workspace-search")?.focus({ preventScroll: true }));
+}
+
+document.querySelector("#workspace-search")?.addEventListener("input", event => filterWorkspaceLauncher(event.target.value));
+
 document.querySelectorAll(".toolbar-menu").forEach(menu => {
   menu.addEventListener("toggle", () => {
     if (!menu.open) return;
+    if (menu.id === "workspace-launcher") {
+      const search = document.querySelector("#workspace-search");
+      if (search) search.value = "";
+      filterWorkspaceLauncher();
+      requestAnimationFrame(() => search?.focus({ preventScroll: true }));
+    }
     document.querySelectorAll(".toolbar-menu").forEach(other => {
       if (other !== menu) other.open = false;
     });
@@ -9163,9 +9795,14 @@ document.querySelectorAll(".toolbar-menu").forEach(menu => {
 document.querySelectorAll(".toolbar-menu-content button").forEach(button => {
   button.addEventListener("click", () => { button.closest(".toolbar-menu").open = false; });
 });
+document.querySelectorAll(".topbar-menu").forEach(menu => menu.addEventListener("toggle", () => {
+  if (!menu.open) return;
+  document.querySelectorAll(".toolbar-menu[open], .export-menu[open]").forEach(other => { other.open = false; });
+}));
 document.addEventListener("pointerdown", event => {
-  if (event.target.closest(".toolbar-menu")) return;
+  if (event.target.closest(".toolbar-menu, .topbar-menu, .export-menu")) return;
   document.querySelectorAll(".toolbar-menu[open]").forEach(menu => { menu.open = false; });
+  document.querySelectorAll(".topbar-menu[open], .export-menu[open]").forEach(menu => { menu.open = false; });
 });
 
 window.addEventListener("keydown", event => {
@@ -9210,7 +9847,8 @@ window.addEventListener("keydown", event => {
     f: () => document.querySelector("#fit-view").click(),
     "0": () => document.querySelector("#reset-camera").click(),
     "[": () => document.querySelector("#toggle-palette-panel").click(),
-    "]": () => document.querySelector("#toggle-inspector-panel").click()
+    "]": () => document.querySelector("#toggle-inspector-panel").click(),
+    w: () => toggleWorkspaceLauncher()
   };
   if (event.key === "Escape") {
     closeFloatingEditors();
@@ -9260,5 +9898,6 @@ new ResizeObserver(resize).observe(wrap);
 window.addEventListener("resize", () => {
   applyWorkspaceUI();
   resize();
+  renderStatisticsWorkspace();
   if (guidedTutorial) positionGuidedTutorial();
 });
