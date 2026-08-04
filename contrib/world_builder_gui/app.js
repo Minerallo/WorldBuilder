@@ -15,6 +15,7 @@ import { solveSteadyConduction, solveTransientConduction } from "./thermal-condu
 import { pairedStatistics, moransI, pointPatternMisfit } from "./spatial-statistics.mjs";
 import { convertTomographyToTemperature, ASPECT_TOMOGRAPHY_DEFAULTS } from "./tomography-temperature.mjs";
 import { buildAspectAscii, buildAspectCompositionContours } from "./aspect-ascii.mjs";
+import { DEFAULT_RHEOLOGY, computeStrengthProfile, computeBdtGrid, parseEarthquakeGeoJson, compareSeismicityToBdt } from "./rheology.mjs";
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
 const COLOR_MAP_VERSION = 4;
@@ -49,6 +50,7 @@ const DEFAULT_THERMAL_CONDUCTION = {
   conductivity:3,heatProduction:0.02e-6,density:2800,heatCapacity:1000,useFeatures:true,
   nx:64,nz:52,timeMyr:20,mapDepthKm:20
 };
+const freshRheology = () => ({ ...DEFAULT_RHEOLOGY, earthquakes: [], result: null });
 const DEFAULT_TOMOGRAPHY = {
   visible: true, opacity: 76, grid: null, sourceMode: null,
   scalarField: "dvs", vpVsRatio: 1.8, isoValue: 0.5, isoMode: "above",
@@ -96,7 +98,7 @@ const DEFAULT_COLOR_MAPS = {
 const DEFAULT_SCENE_LAYERS = {
   grid: true, features: true, labels: true, connections: true, slabs: true,
   topography: true, paleogeography: true, referenceMap: true, tomography: true,
-  lithosphere: true, gravity: true, computedThermal: true, legend: true
+  lithosphere: true, gravity: true, computedThermal: true, rheologyBdt: true, seismicity: true, legend: true
 };
 const DEFAULT_UI = {
   paletteCollapsed: false, inspectorCollapsed: false, splitView: false,
@@ -124,6 +126,9 @@ const stressCompareCanvas = document.querySelector("#stress-compare-canvas");
 const thermalMapCanvas = document.querySelector("#thermal-map-canvas");
 const thermalSectionCanvas = document.querySelector("#thermal-section-canvas");
 const thermalProfileCanvas = document.querySelector("#thermal-profile-canvas");
+const rheologyMapCanvas = document.querySelector("#rheology-map-canvas");
+const rheologySectionCanvas = document.querySelector("#rheology-section-canvas");
+const rheologyProfileCanvas = document.querySelector("#rheology-profile-canvas");
 const statisticsMapCanvas = document.querySelector("#statistics-map-canvas");
 const statisticsChartCanvas = document.querySelector("#statistics-chart-canvas");
 let canvas = primaryCanvas;
@@ -135,6 +140,7 @@ let renderOptions = {
 const wrap = document.querySelector("#canvas-wrap");
 let state = loadState();
 let thermalConductionResult = null;
+let rheologyResult = null;
 let statisticsResult = null;
 const TUTORIAL_PROGRESS_KEY = "gwb-visual-builder-tutorial-progress-v1";
 const TUTORIALS = [
@@ -312,6 +318,7 @@ function loadState() {
       saved.gravity = { ...DEFAULT_GRAVITY, ...(saved.gravity || {}) };
       saved.stress = { ...DEFAULT_STRESS, ...(saved.stress || {}) };
       saved.thermalConduction = { ...DEFAULT_THERMAL_CONDUCTION, ...(saved.thermalConduction || {}) };
+      saved.rheology = { ...freshRheology(), ...(saved.rheology || {}), earthquakes: Array.isArray(saved.rheology?.earthquakes) ? saved.rheology.earthquakes : [] };
       saved.tomography = { ...DEFAULT_TOMOGRAPHY, ...(saved.tomography || {}) };
       saved.lithosphere = { ...DEFAULT_LITHOSPHERE, ...(saved.lithosphere || {}) };
       saved.provenance = {
@@ -350,7 +357,7 @@ function loadState() {
     settings: { ...DEFAULT_SETTINGS }, features: [], connections: [], rawWorld: null,
     appearance: { ...DEFAULT_APPEARANCE }, topography: { ...DEFAULT_TOPOGRAPHY },
     paleogeography: { ...DEFAULT_PALEOGEOGRAPHY }, sceneLayers: { ...DEFAULT_SCENE_LAYERS },
-    gravity: { ...DEFAULT_GRAVITY }, stress: { ...DEFAULT_STRESS }, thermalConduction:{...DEFAULT_THERMAL_CONDUCTION}, tomography: { ...DEFAULT_TOMOGRAPHY }, lithosphere: { ...DEFAULT_LITHOSPHERE },
+    gravity: { ...DEFAULT_GRAVITY }, stress: { ...DEFAULT_STRESS }, thermalConduction:{...DEFAULT_THERMAL_CONDUCTION}, rheology: freshRheology(), tomography: { ...DEFAULT_TOMOGRAPHY }, lithosphere: { ...DEFAULT_LITHOSPHERE },
     provenance: { tomographyModelIds: [], lithosphereModelIds: [] }, exportOptions: { ...DEFAULT_EXPORT_OPTIONS },
     colorMaps: structuredClone(DEFAULT_COLOR_MAPS), colorMapVersion: COLOR_MAP_VERSION,
     layerGroups: [], derivedFields: [], ui: { ...DEFAULT_UI }, sectionPath: []
@@ -426,6 +433,7 @@ function restoreProjectStateDocument(documentState) {
     gravity: { ...DEFAULT_GRAVITY, ...(restored.gravity || {}) },
     stress: { ...DEFAULT_STRESS, ...(restored.stress || {}) },
     thermalConduction: { ...DEFAULT_THERMAL_CONDUCTION, ...(restored.thermalConduction || {}) },
+    rheology: { ...freshRheology(), ...(restored.rheology || {}), earthquakes: Array.isArray(restored.rheology?.earthquakes) ? restored.rheology.earthquakes : [] },
     tomography: { ...DEFAULT_TOMOGRAPHY, ...(restored.tomography || {}) },
     lithosphere: { ...DEFAULT_LITHOSPHERE, ...(restored.lithosphere || {}) },
     provenance: {
@@ -467,6 +475,7 @@ function restoreProjectStateDocument(documentState) {
   referenceImage = null;
   topographyImage = null;
   computedModel = null;
+  rheologyResult = null;
   undoStack = [];
   redoStack = [];
   lastHistorySignature = "";
@@ -2514,6 +2523,7 @@ function drawGrid(width, height) {
   drawPaleogeography();
   drawGravityOverlay();
   drawDerivedFields();
+  drawRheologyPlanOverlay();
   if (sceneLayerVisible("grid")) {
     context.strokeStyle = palette.grid;
     context.lineWidth = 1;
@@ -4589,6 +4599,7 @@ function drawSectionProfile(width, height) {
       context.fillText(viewportFeatureLabel(feature), x + 5, Math.max(14, top - 5) + stagger);
     }
   }
+  drawRheologySectionLine(section, sectionMetrics, pad, plotWidth, plotHeight, maxDepth);
   drawAdaptiveMeshSection(section, sectionMetrics, pad, plotWidth, plotHeight);
   context.fillStyle = "#8ea1a8"; context.font = "10px ui-monospace";
   context.fillText(`SECTION · ${section.length} vertices · ${(sectionLength / 1000).toFixed(0)} km · select a feature, drag contour nodes · double-click contour to add`, pad.left, height - 16);
@@ -5224,6 +5235,39 @@ function renderThermalWorkspace(){const dialog=document.querySelector("#thermal-
 function syncThermalConductionUI(){const config=ensureThermalConduction();const values={"thermal-mode":config.mode,"thermal-top-temperature":config.topTemperature,"thermal-bottom-temperature":config.bottomTemperature,"thermal-conductivity":config.conductivity,"thermal-heat-production":config.heatProduction*1e6,"thermal-use-features":config.useFeatures,"thermal-bottom-mode":config.bottomMode,"thermal-bottom-flux":config.bottomHeatFlux*1000,"thermal-time-myr":config.timeMyr,"thermal-density":config.density,"thermal-heat-capacity":config.heatCapacity,"thermal-nx":config.nx,"thermal-nz":config.nz,"thermal-map-depth":config.mapDepthKm};Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(!input||document.activeElement===input)return;if(input.type==="checkbox")input.checked=Boolean(value);else input.value=value;});const range=document.querySelector("#thermal-temperature-range");if(thermalConductionResult){const[min,max]=thermalResultRange();range.textContent=`${min.toFixed(0)}–${max.toFixed(0)} K`;}else range.textContent="Not solved";}
 function thermalCsv(){if(!thermalConductionResult)return"";const rows=["x_m,depth_m,temperature_K,conductivity_W_mK,heat_production_W_m3"];const r=thermalConductionResult;for(let iz=0;iz<r.nz;iz++)for(let ix=0;ix<r.nx;ix++){const i=iz*r.nx+ix;rows.push([state.settings.xMin+r.width*ix/(r.nx-1),r.depth*iz/(r.nz-1),r.temperature[i],r.conductivity[i],r.heatProduction[i]].join(","));}return`${rows.join("\n")}\n`;}
 async function exportThermalScreenshot(){try{renderThermalWorkspace();const grid=document.querySelector("#thermal-workspace-grid");const image=composeCanvasLayout([{source:thermalMapCanvas,label:"Temperature map"},{source:thermalSectionCanvas,label:"Conductive section"},{source:thermalProfileCanvas,label:"Geotherm"}],grid);downloadBlob(screenshotName(`gwb-thermal-conduction-${grid.dataset.layout}`),await canvasToPngBlob(image));showToast("Thermal workspace PNG saved");}catch{showToast("Thermal screenshot could not be encoded");}}
+
+function ensureRheology(){state.rheology={...freshRheology(),...(state.rheology||{})};state.rheology.earthquakes=Array.isArray(state.rheology.earthquakes)?state.rheology.earthquakes:[];return state.rheology;}
+function rheologyFeatureAt(x,y){return [...state.features].reverse().find(feature=>featureVisible(feature)&&gravityFeatureContains(feature,[x,y]));}
+function rheologyColumnOptions(x,y){
+  const config=ensureRheology();const feature=rheologyFeatureAt(x,y);const maxDepthKm=Math.max(1,(state.settings.zMax-state.settings.zMin)/1000);
+  const density=Number(feature?.referenceDensity||feature?.layers?.[0]?.density||config.density);
+  const targetTemperature=Number(feature?.temperature||state.settings.mantleTemperature||config.mantleTemperature);
+  return{...config,result:undefined,earthquakes:undefined,density,gravity:Number(state.settings.gravityMagnitude||config.gravity),dimension:Number(state.settings.dimension||3),maxDepthKm,
+    temperatureAt(depthKm){
+      if(thermalConductionResult){const ix=Math.max(0,Math.min(thermalConductionResult.nx-1,Math.round((x-state.settings.xMin)/Math.max(1,state.settings.xMax-state.settings.xMin)*(thermalConductionResult.nx-1))));const iz=Math.max(0,Math.min(thermalConductionResult.nz-1,Math.round(depthKm/maxDepthKm*(thermalConductionResult.nz-1))));return thermalConductionResult.temperature[iz*thermalConductionResult.nx+ix];}
+      return Number(config.surfaceTemperature)+(targetTemperature-Number(config.surfaceTemperature))*Math.min(1,depthKm/maxDepthKm);
+    }};
+}
+function rheologyBdtAt(x,y){const result=rheologyResult||ensureRheology().result;if(!result)return null;const col=Math.max(0,Math.min(result.nx-1,Math.floor((x-result.bounds.xMin)/Math.max(1e-12,result.bounds.xMax-result.bounds.xMin)*result.nx)));const row=Math.max(0,Math.min(result.ny-1,Math.floor((y-result.bounds.yMin)/Math.max(1e-12,result.bounds.yMax-result.bounds.yMin)*result.ny)));return result.values[row*result.nx+col];}
+function earthquakeModelPoint(event){const source=geographicSourceBounds();if(state.settings.coordinateSystem==="spherical")return[event.longitude,event.latitude];return[state.settings.xMin+(event.longitude-source.west)/Math.max(1e-12,source.east-source.west)*(state.settings.xMax-state.settings.xMin),state.settings.yMin+(event.latitude-source.south)/Math.max(1e-12,source.north-source.south)*(state.settings.yMax-state.settings.yMin)];}
+function computeRheologyModel(){
+  const config=ensureRheology();const bounds={xMin:Number(state.settings.xMin),xMax:Number(state.settings.xMax),yMin:Number(state.settings.yMin),yMax:Number(state.settings.yMax)};
+  rheologyResult=computeBdtGrid({bounds,nx:Math.max(8,Math.round(config.samplesX)),ny:Math.max(6,Math.round(config.samplesY)),columnAt:rheologyColumnOptions});
+  const comparisons=compareSeismicityToBdt(config.earthquakes,event=>{const [x,y]=earthquakeModelPoint(event);return rheologyBdtAt(x,y);});
+  rheologyResult.seismicity=comparisons;config.result={...rheologyResult,profiles:undefined};state.sceneLayers.rheologyBdt=config.showBdt!==false;state.sceneLayers.seismicity=config.showSeismicity!==false;persist();renderLayersPanel();syncRheologyUI();renderRheologyWorkspace();draw();showToast("Rheological strength and BDT depth computed");return rheologyResult;
+}
+function bdtColor(value,min,max){const t=Math.max(0,Math.min(1,(value-min)/Math.max(1e-9,max-min)));return `hsl(${52+155*t} 72% ${52-10*t}%)`;}
+function drawRheologyPlanOverlay(){
+  const result=rheologyResult||ensureRheology().result;if(result&&sceneLayerVisible("rheologyBdt")&&ensureRheology().showBdt!==false){context.save();context.globalAlpha=.42;for(let row=0;row<result.ny;row++)for(let col=0;col<result.nx;col++){const value=result.values[row*result.nx+col];if(!Number.isFinite(value))continue;const a=worldToCanvas([result.bounds.xMin+col/result.nx*(result.bounds.xMax-result.bounds.xMin),result.bounds.yMin+row/result.ny*(result.bounds.yMax-result.bounds.yMin)]);const b=worldToCanvas([result.bounds.xMin+(col+1)/result.nx*(result.bounds.xMax-result.bounds.xMin),result.bounds.yMin+(row+1)/result.ny*(result.bounds.yMax-result.bounds.yMin)]);context.fillStyle=bdtColor(value,result.min,result.max);context.fillRect(a[0],b[1],b[0]-a[0]+1,a[1]-b[1]+1);}context.restore();}
+  if(sceneLayerVisible("seismicity")&&ensureRheology().showSeismicity!==false){context.save();ensureRheology().earthquakes.forEach(event=>{const p=worldToCanvas(earthquakeModelPoint(event));context.fillStyle=event.depthKm<=(rheologyBdtAt(...earthquakeModelPoint(event))??-1)?"#ffe25e":"#ff5a70";context.strokeStyle="#101519";context.lineWidth=1;context.beginPath();context.arc(...p,Math.max(2.5,Math.min(7,2+Number(event.magnitude||0)*.6)),0,Math.PI*2);context.fill();context.stroke();});context.restore();}
+}
+function drawRheologySectionLine(section,metrics,pad,plotWidth,plotHeight,maxDepth){if(!sceneLayerVisible("rheologyBdt")||!rheologyResult&&!ensureRheology().result)return;context.save();context.strokeStyle="#ffe25e";context.shadowColor="#101519";context.shadowBlur=2;context.lineWidth=3;context.beginPath();for(let i=0;i<=120;i++){const point=pointAlongSectionPath(metrics.total*i/120,section,metrics);const depth=(rheologyBdtAt(point[0],point[1])||0)*1000;const x=pad.left+plotWidth*i/120,y=pad.top+depth/maxDepth*plotHeight;i?context.lineTo(x,y):context.moveTo(x,y);}context.stroke();context.shadowBlur=0;context.fillStyle="#ffe25e";context.font="700 9px ui-monospace";context.fillText("BDT",pad.left+6,pad.top+16);context.restore();}
+function syncRheologyUI(){const r=ensureRheology();const values={"rheology-strain-rate":r.strainRate,"rheology-prefactor":r.prefactor,"rheology-exponent":r.stressExponent,"rheology-energy":r.activationEnergy/1000,"rheology-volume":r.activationVolume*1e6,"rheology-friction":r.frictionAngle,"rheology-cohesion":r.cohesion/1e6,"rheology-yield-cap":r.maxYieldStress/1e6,"rheology-density":r.density};Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(input&&document.activeElement!==input)input.value=value;});document.querySelector("#show-rheology-bdt").checked=r.showBdt!==false;document.querySelector("#show-rheology-seismicity").checked=r.showSeismicity!==false;const result=rheologyResult||r.result;document.querySelector("#rheology-bdt-range").textContent=result&&Number.isFinite(result.min)?`BDT ${result.min.toFixed(1)}–${result.max.toFixed(1)} km`:"Not computed";const match=result?.seismicity;document.querySelector("#rheology-match").textContent=match?.comparable?`${match.matched}/${match.comparable} earthquakes within predicted plastic domain (${match.matchPercent.toFixed(0)}%)`:"No comparable seismicity";document.querySelector("#seismicity-status").textContent=r.earthquakes.length?`${r.earthquakes.length.toLocaleString()} events loaded`:"No events loaded.";}
+function drawRheologyMap(){const surface=stressCanvas(rheologyMapCanvas);if(!surface)return;const{ctx,width,height,palette}=surface;const result=rheologyResult||ensureRheology().result;const project=stressProjector(width,height);drawStressGrid(ctx,width,height,project);if(result){for(let row=0;row<result.ny;row++)for(let col=0;col<result.nx;col++){const value=result.values[row*result.nx+col];if(!Number.isFinite(value))continue;const a=project([result.bounds.xMin+col/result.nx*(result.bounds.xMax-result.bounds.xMin),result.bounds.yMin+row/result.ny*(result.bounds.yMax-result.bounds.yMin)]),b=project([result.bounds.xMin+(col+1)/result.nx*(result.bounds.xMax-result.bounds.xMin),result.bounds.yMin+(row+1)/result.ny*(result.bounds.yMax-result.bounds.yMin)]);ctx.fillStyle=bdtColor(value,result.min,result.max);ctx.globalAlpha=.7;ctx.fillRect(a[0],b[1],b[0]-a[0]+1,a[1]-b[1]+1);}ctx.globalAlpha=1;}drawStressFeatures(ctx,project);ensureRheology().earthquakes.forEach(event=>{const p=project(earthquakeModelPoint(event));const local=rheologyBdtAt(...earthquakeModelPoint(event));ctx.fillStyle=event.depthKm<=(local??-1)?"#ffe25e":"#ff5a70";ctx.strokeStyle=palette.background;ctx.beginPath();ctx.arc(...p,Math.max(3,Math.min(8,2+Number(event.magnitude||0)*.7)),0,Math.PI*2);ctx.fill();ctx.stroke();});ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText(result?`BDT ${result.min.toFixed(1)}–${result.max.toFixed(1)} km · yellow: within plastic domain · red: below BDT`:"Compute the rheological model",40,height-14);}
+function drawRheologySection(){const surface=stressCanvas(rheologySectionCanvas);if(!surface)return;const{ctx,width,height,palette}=surface;const section=activeSectionPath(),metrics=sectionPathMetrics(section),pad={left:48,right:18,top:36,bottom:28},maxDepthKm=Math.max(1,(state.settings.zMax-state.settings.zMin)/1000),pw=width-pad.left-pad.right,ph=height-pad.top-pad.bottom;ctx.strokeStyle=palette.grid;for(let i=0;i<=5;i++){const y=pad.top+ph*i/5;ctx.beginPath();ctx.moveTo(pad.left,y);ctx.lineTo(width-pad.right,y);ctx.stroke();ctx.fillStyle=palette.muted;ctx.font="8px ui-monospace";ctx.fillText(`${(maxDepthKm*i/5).toFixed(0)} km`,4,y+3);}if(rheologyResult||ensureRheology().result){ctx.strokeStyle="#ffe25e";ctx.lineWidth=3;ctx.beginPath();for(let i=0;i<=100;i++){const point=pointAlongSectionPath(metrics.total*i/100,section,metrics),depth=rheologyBdtAt(...point)||0,x=pad.left+pw*i/100,y=pad.top+ph*depth/maxDepthKm;i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}ensureRheology().earthquakes.forEach(event=>{const p=earthquakeModelPoint(event);let best={distance:Infinity,along:0};for(let i=0;i<=100;i++){const along=metrics.total*i/100,q=pointAlongSectionPath(along,section,metrics),distance=Math.hypot(q[0]-p[0],q[1]-p[1]);if(distance<best.distance)best={distance,along};}const x=pad.left+pw*best.along/Math.max(1,metrics.total),y=pad.top+ph*event.depthKm/maxDepthKm;ctx.fillStyle="#ff5a70";ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill();});}
+function drawRheologyProfile(){const surface=stressCanvas(rheologyProfileCanvas);if(!surface)return;const{ctx,width,height,palette}=surface;const x=(state.settings.xMin+state.settings.xMax)/2,y=(state.settings.yMin+state.settings.yMax)/2,profile=computeStrengthProfile(rheologyColumnOptions(x,y)),pad={left:48,right:22,top:36,bottom:30},maxStress=Math.max(...profile.rows.flatMap(row=>[Math.min(row.plasticPa,2e9),Math.min(row.viscousPa,2e9)])),maxDepth=profile.maxDepthKm,px=value=>pad.left+Math.min(value,maxStress)/maxStress*(width-pad.left-pad.right),py=depth=>pad.top+depth/maxDepth*(height-pad.top-pad.bottom);[["plasticPa","#ff7657","plastic"],["viscousPa","#53c9e8","viscous"],["differentialStressPa","#f4df66","strength"]].forEach(([key,color])=>{ctx.beginPath();profile.rows.forEach((row,i)=>{const p=[px(row[key]),py(row.depthKm)];i?ctx.lineTo(...p):ctx.moveTo(...p);});ctx.strokeStyle=color;ctx.lineWidth=2;ctx.stroke();});if(Number.isFinite(profile.bdtDepthKm)){ctx.strokeStyle="#ffe25e";ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(pad.left,py(profile.bdtDepthKm));ctx.lineTo(width-pad.right,py(profile.bdtDepthKm));ctx.stroke();ctx.setLineDash([]);}ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText("plastic · viscous · governing strength",pad.left,pad.top-12);ctx.fillText(`${(maxStress/1e6).toFixed(0)} MPa`,width-pad.right-55,height-10);}
+function renderRheologyWorkspace(){const dialog=document.querySelector("#rheology-workspace");if(!dialog?.open)return;drawRheologyMap();drawRheologySection();drawRheologyProfile();syncRheologyUI();}
+function rheologyCsv(){const result=rheologyResult||ensureRheology().result;if(!result)return"";const rows=["x,y,bdt_depth_km"];for(let row=0;row<result.ny;row++)for(let col=0;col<result.nx;col++)rows.push([result.bounds.xMin+(col+.5)/result.nx*(result.bounds.xMax-result.bounds.xMin),result.bounds.yMin+(row+.5)/result.ny*(result.bounds.yMax-result.bounds.yMin),result.values[row*result.nx+col]??""] .join(","));return `${rows.join("\n")}\n`;}
 
 function hitFeature(point) {
   const [x, y] = point;
@@ -6017,6 +6061,7 @@ function loadWorld(world, grid = "") {
   state.ui = ui;
   state.sectionPath = state.settings.section?.map(point => [...point]) || [];
   computedModel = null;
+  rheologyResult = null;
   referenceImage = null;
   if (grid) state.settings = applyGridConfig(state.settings, grid);
   else fitDomainToFeatures();
@@ -9151,6 +9196,21 @@ document.querySelector("#close-thermal-workspace").addEventListener("click",()=>
 document.querySelector("#thermal-workspace-layout").addEventListener("change",event=>{document.querySelector("#thermal-workspace-grid").dataset.layout=event.target.value;requestAnimationFrame(renderThermalWorkspace);});
 document.querySelector("#export-thermal-csv").addEventListener("click",()=>{if(!thermalConductionResult)return showToast("Solve a thermal field first");download("thermal-conduction.csv",thermalCsv(),"text/csv");});
 document.querySelector("#export-thermal-screenshot").addEventListener("click",exportThermalScreenshot);
+document.querySelector("#toggle-rheology").addEventListener("click",()=>{const dialog=document.querySelector("#rheology-workspace");document.querySelector("#workspace-launcher").open=false;document.querySelector("#toggle-rheology").setAttribute("aria-expanded","true");syncRheologyUI();if(!dialog.open)dialog.showModal();requestAnimationFrame(()=>{if(rheologyResult||ensureRheology().result)renderRheologyWorkspace();else computeRheologyModel();});});
+const rheologyInputKeys={"rheology-strain-rate":["strainRate",1],"rheology-prefactor":["prefactor",1],"rheology-exponent":["stressExponent",1],"rheology-energy":["activationEnergy",1000],"rheology-volume":["activationVolume",1e-6],"rheology-friction":["frictionAngle",1],"rheology-cohesion":["cohesion",1e6],"rheology-yield-cap":["maxYieldStress",1e6],"rheology-density":["density",1]};
+Object.entries(rheologyInputKeys).forEach(([id,[key,scale]])=>document.querySelector(`#${id}`).addEventListener("input",event=>{ensureRheology()[key]=Number(event.target.value)*scale;rheologyResult=null;ensureRheology().result=null;persist();}));
+document.querySelector("#compute-rheology").addEventListener("click",computeRheologyModel);
+document.querySelector("#show-rheology-bdt").addEventListener("change",event=>{ensureRheology().showBdt=event.target.checked;state.sceneLayers.rheologyBdt=event.target.checked;persist();renderLayersPanel();draw();renderRheologyWorkspace();});
+document.querySelector("#show-rheology-seismicity").addEventListener("change",event=>{ensureRheology().showSeismicity=event.target.checked;state.sceneLayers.seismicity=event.target.checked;persist();renderLayersPanel();draw();renderRheologyWorkspace();});
+document.querySelector("#rheology-workspace-layout").addEventListener("change",event=>{document.querySelector("#rheology-workspace-grid").dataset.layout=event.target.value;requestAnimationFrame(renderRheologyWorkspace);});
+document.querySelector("#minimize-rheology-workspace").addEventListener("click",()=>{document.querySelector("#toggle-rheology").setAttribute("aria-expanded","false");minimizeSimpleWorkspace("rheology-workspace","restore-rheology-workspace");});
+document.querySelector("#restore-rheology-workspace").addEventListener("click",()=>{document.querySelector("#toggle-rheology").setAttribute("aria-expanded","true");restoreSimpleWorkspace("rheology-workspace","restore-rheology-workspace",renderRheologyWorkspace);});
+document.querySelector("#close-rheology-workspace").addEventListener("click",()=>{document.querySelector("#toggle-rheology").setAttribute("aria-expanded","false");closeSimpleWorkspace("rheology-workspace","restore-rheology-workspace");});
+document.querySelector("#export-rheology-csv").addEventListener("click",()=>{if(!rheologyResult&&!ensureRheology().result)return showToast("Compute the rheological model first");download("gwb-bdt-depth.csv",rheologyCsv(),"text/csv");});
+document.querySelector("#seismicity-file").addEventListener("change",async event=>{const file=event.target.files?.[0];if(!file)return;try{ensureRheology().earthquakes=parseEarthquakeGeoJson(await readFileWithProgress(file,`Opening ${file.name}`));computeRheologyModel();showToast(`${ensureRheology().earthquakes.length} earthquake events imported`);}catch(error){showToast(error.message||"Could not import earthquake catalog");}finally{event.target.value="";}});
+document.querySelector("#load-usgs-seismicity").addEventListener("click",async()=>{const button=document.querySelector("#load-usgs-seismicity"),bounds=geographicSourceBounds(),start=document.querySelector("#seismicity-start").value,minMagnitude=document.querySelector("#seismicity-min-mag").value;const params=new URLSearchParams({format:"geojson",starttime:start||"2025-01-01",minmagnitude:minMagnitude||"4.5",minlongitude:bounds.west,maxlongitude:bounds.east,minlatitude:bounds.south,maxlatitude:bounds.north,orderby:"time",limit:"20000"});button.disabled=true;button.textContent="Loading…";try{const response=await fetch(`https://earthquake.usgs.gov/fdsnws/event/1/query?${params}`);if(!response.ok)throw new Error(`USGS service returned ${response.status}`);ensureRheology().earthquakes=parseEarthquakeGeoJson(await response.json());computeRheologyModel();showToast(`${ensureRheology().earthquakes.length} USGS events loaded`);}catch(error){showToast(`Seismicity load failed: ${error.message}`);}finally{button.disabled=false;button.textContent="Load USGS catalog";}});
+new ResizeObserver(()=>requestAnimationFrame(renderRheologyWorkspace)).observe(document.querySelector("#rheology-workspace-grid"));
+const seismicityStartInput=document.querySelector("#seismicity-start");if(seismicityStartInput&&!seismicityStartInput.value){const startDate=new Date();startDate.setUTCFullYear(startDate.getUTCFullYear()-1);seismicityStartInput.value=startDate.toISOString().slice(0,10);}
 document.querySelector("#toggle-statistics").addEventListener("click",()=>{const dialog=document.querySelector("#statistics-workspace");document.querySelector("#toggle-statistics").setAttribute("aria-expanded","true");if(!dialog.open)dialog.showModal();requestAnimationFrame(()=>statisticsResult?renderStatisticsWorkspace():runStatisticsAnalysis());});
 document.querySelector("#run-statistics").addEventListener("click",runStatisticsAnalysis);
 document.querySelector("#statistics-source").addEventListener("change",runStatisticsAnalysis);
@@ -9697,6 +9757,7 @@ document.querySelector("#new-project").addEventListener("click", () => {
     gravity: { ...DEFAULT_GRAVITY },
     stress: { ...DEFAULT_STRESS },
     thermalConduction: { ...DEFAULT_THERMAL_CONDUCTION },
+    rheology: freshRheology(),
     tomography: { ...DEFAULT_TOMOGRAPHY },
     lithosphere: { ...DEFAULT_LITHOSPHERE },
     provenance: { tomographyModelIds: [], lithosphereModelIds: [] },
@@ -9710,6 +9771,7 @@ document.querySelector("#new-project").addEventListener("click", () => {
   referenceImage = null;
   topographyImage = null;
   computedModel = null;
+  rheologyResult = null;
   selectedId = null;
   selectedIds.clear();
   applyWorkspaceUI();

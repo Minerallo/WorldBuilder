@@ -14,6 +14,9 @@
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+.workspace-card-icon.rheology{color:#e5c65a;background:color-mix(in srgb,#e5c65a 14%,transparent)}
+.rheology-workspace{border-color:#766a31}.rheology-workspace a{color:#e5c65a}.rheology-workspace .primary{background:#d6b83f;color:#101519}.rheology-workspace .wide{width:100%;margin-top:8px}
+
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 1100px; background: var(--bg); color: var(--text); overflow: hidden; }
 button, input, select { font: inherit; }

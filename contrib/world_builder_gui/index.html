@@ -265,6 +265,8 @@
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="lithosphere" checked><span class="layer-eye">◉</span><span><strong>Lithosphere model</strong><small>Imported crust, LAB, thermal or density field</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="gravity" checked><span class="layer-eye">◉</span><span><strong>Gravity anomaly</strong><small>Live Bouguer, free-air or residual preview</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="computedThermal" checked><span class="layer-eye">◉</span><span><strong>Computed thermal state</strong><small>GWB WebAssembly temperature samples</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="rheologyBdt" checked><span class="layer-eye">◉</span><span><strong>Brittle–ductile transition</strong><small>Computed BDT depth map and section line</small></span></label>
+          <label class="scene-layer-row"><input type="checkbox" data-scene-layer="seismicity" checked><span class="layer-eye">◉</span><span><strong>Seismicity</strong><small>Catalog events compared with the plastic domain</small></span></label>
           <label class="scene-layer-row"><input type="checkbox" data-scene-layer="legend" checked><span class="layer-eye">◉</span><span><strong>Colour scales</strong><small>Elevation and temperature legends</small></span></label>
         </div>
         <div class="section-heading navigator-heading layer-feature-heading">
@@ -322,6 +324,7 @@
               <header><span>Physics &amp; analysis</span><small>Compute and interpret</small></header>
               <div class="workspace-launcher-grid">
                 <button id="toggle-thermal-conduction" class="workspace-card thermal-conduction-button" aria-expanded="false" data-workspace-search="thermal conduction temperature heat geotherm"><span class="workspace-card-icon thermal">♨</span><span><strong>Thermal conduction</strong><small>Steady and transient temperature</small></span><em>NEW</em></button>
+                <button id="toggle-rheology" class="workspace-card rheology-button" aria-expanded="false" data-workspace-search="rheology strength brittle ductile bdt plastic viscous strain rate seismicity earthquakes"><span class="workspace-card-icon rheology">ϵ̇</span><span><strong>Rheology &amp; seismicity</strong><small>Strength envelopes, BDT and earthquakes</small></span><em>NEW</em></button>
                 <button id="toggle-gravity" class="workspace-card gravity-button" aria-expanded="false" data-workspace-search="gravity bouguer free air tensor density"><span class="workspace-card-icon gravity">g</span><span><strong>Gravity</strong><small>Anomalies, sections and contours</small></span></button>
                 <button id="toggle-stress" class="workspace-card stress-button" aria-expanded="false" data-workspace-search="stress dykes vents magma elastic"><span class="workspace-card-icon stress">σ</span><span><strong>Stress &amp; dykes</strong><small>Stress fields and path comparison</small></span></button>
                 <button id="toggle-statistics" class="workspace-card statistics-button" aria-expanded="false" data-workspace-search="statistics validation spatial correlation moran misfit rmse pearson vents"><span class="workspace-card-icon statistics">Σ</span><span><strong>Statistics &amp; validation</strong><small>Spatial correlation and model misfit</small></span><em>NEW</em></button>
@@ -1174,6 +1177,28 @@
     </div>
   </dialog>
 
+  <dialog id="rheology-workspace" class="thermal-workspace rheology-workspace">
+    <div class="thermal-workspace-header">
+      <div><small>BRITTLE–DUCTILE STRENGTH · EARTHQUAKE COMPARISON</small><strong>Rheology &amp; Seismicity workspace</strong></div>
+      <label>Layout<select id="rheology-workspace-layout"><option value="triple">BDT map + section + envelope</option><option value="map">BDT map</option><option value="section">Section</option><option value="profile">Strength envelope</option></select></label>
+      <span class="thermal-workspace-actions"><button id="compute-rheology" class="primary">▶ Compute</button><button id="export-rheology-csv" class="ghost">Export CSV</button><button id="minimize-rheology-workspace" class="ghost">Minimize —</button><button id="close-rheology-workspace" class="ghost">Close</button></span>
+    </div>
+    <div class="thermal-workspace-body">
+      <aside class="thermal-workspace-sidebar">
+        <section><small>VISCOUS CREEP</small><label>Strain rate (s⁻¹)<input id="rheology-strain-rate" type="number" step="any"></label><div class="form-grid"><label>Prefactor A (Pa⁻ⁿ s⁻¹)<input id="rheology-prefactor" type="number" step="any"></label><label>Stress exponent n<input id="rheology-exponent" type="number" min="1" step="0.1"></label><label>Activation E (kJ/mol)<input id="rheology-energy" type="number" min="0"></label><label>Activation V (cm³/mol)<input id="rheology-volume" type="number" min="0" step="0.1"></label></div></section>
+        <section><small>PLASTIC YIELD</small><div class="form-grid"><label>Friction angle (°)<input id="rheology-friction" type="number" min="0" max="89"></label><label>Cohesion (MPa)<input id="rheology-cohesion" type="number" min="0"></label><label>Yield cap (MPa)<input id="rheology-yield-cap" type="number" min="1"></label><label>Density (kg/m³)<input id="rheology-density" type="number" min="1"></label></div><p>Drucker–Prager plastic strength is compared with dislocation-creep strength at every depth.</p></section>
+        <section><small>VIEW LAYERS</small><label class="checkbox-row"><input id="show-rheology-bdt" type="checkbox" checked> BDT map and section line</label><label class="checkbox-row"><input id="show-rheology-seismicity" type="checkbox" checked> Earthquake epicentres and depths</label></section>
+        <section><small>SEISMICITY</small><div class="form-grid"><label>Start date<input id="seismicity-start" type="date"></label><label>Minimum M<input id="seismicity-min-mag" type="number" value="4.5" step="0.1"></label></div><button id="load-usgs-seismicity" class="primary wide">Load USGS catalog</button><label class="file-button">Import GeoJSON catalog<input id="seismicity-file" type="file" accept=".geojson,.json" hidden></label><p id="seismicity-status">No events loaded.</p><p><a href="https://www.globalcmt.org/CMTfiles.html" target="_blank" rel="noreferrer">Global CMT catalog downloads ↗</a></p></section>
+        <section class="thermal-run-summary"><small>MODEL RESULT</small><strong id="rheology-bdt-range">Not computed</strong><span id="rheology-match">Compute a strength model</span></section>
+      </aside>
+      <div id="rheology-workspace-grid" class="thermal-workspace-grid" data-layout="triple">
+        <section class="thermal-result-pane thermal-map-pane"><header>Map · BDT depth and earthquake epicentres</header><canvas id="rheology-map-canvas"></canvas></section>
+        <section class="thermal-result-pane thermal-section-pane"><header>Section · BDT line and hypocentres</header><canvas id="rheology-section-canvas"></canvas></section>
+        <section class="thermal-result-pane thermal-profile-pane"><header>Strength envelope · plastic and viscous</header><canvas id="rheology-profile-canvas"></canvas></section>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="statistics-workspace" class="statistics-workspace">
     <div class="statistics-workspace-header">
       <div><small>MODEL–DATA COMPARISON · SPATIAL PATTERN ANALYSIS</small><strong>Statistics &amp; Validation workspace</strong></div>
@@ -1252,6 +1277,10 @@
       <span class="workspace-dock-icon" aria-hidden="true">♨</span>
       <span><strong>Thermal conduction</strong><small>Temperature solution preserved</small></span>
       <span class="workspace-dock-restore" aria-hidden="true">↗</span>
+    </button>
+    <button id="restore-rheology-workspace" class="workspace-dock-item" title="Reopen the rheology and seismicity workspace" hidden>
+      <span class="workspace-dock-grip" aria-hidden="true"></span><span class="workspace-dock-icon" aria-hidden="true">ϵ̇</span>
+      <span><strong>Rheology &amp; seismicity</strong><small>Strength result preserved</small></span><span class="workspace-dock-restore" aria-hidden="true">↗</span>
     </button>
     <button id="restore-stress-workspace" class="workspace-dock-item" title="Reopen the stress and dykes workspace" hidden>
       <span class="workspace-dock-grip" aria-hidden="true"></span>
