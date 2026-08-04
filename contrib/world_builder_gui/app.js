@@ -19,9 +19,10 @@ import { DEFAULT_RHEOLOGY, computeStrengthProfile, computeBdtGrid, parseEarthqua
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
 const COLOR_MAP_VERSION = 4;
+const APPEARANCE_VERSION = 3;
 const DEFAULT_APPEARANCE = {
   theme: "dark", renderMode: "geology", shading: true, light: 65,
-  autoTemperaturePreview: true, temperatureContours: true, slabProjection: true, temperatureMin: 273, temperatureMax: 1800,
+  autoTemperaturePreview: false, temperatureContours: true, slabProjection: true, temperatureMin: 273, temperatureMax: 1800,
   viewZoom: 1, viewRotation: 0, viewPanX: 0, viewPanY: 0
 };
 const DEFAULT_TOPOGRAPHY = {
@@ -312,6 +313,11 @@ function loadState() {
       saved.settings.coordinateSystem = saved.settings.gridType === "chunk" ? "spherical" : "cartesian";
       saved.settings.radius ||= DEFAULT_SETTINGS.radius;
       saved.appearance = { ...DEFAULT_APPEARANCE, ...(saved.appearance || {}) };
+      if (Number(saved.appearanceVersion || 0) < APPEARANCE_VERSION) {
+        saved.appearance.autoTemperaturePreview = false;
+        saved.appearance.renderMode = "geology";
+      }
+      saved.appearanceVersion = APPEARANCE_VERSION;
       saved.topography = { ...DEFAULT_TOPOGRAPHY, ...(saved.topography || {}) };
       saved.paleogeography = { ...DEFAULT_PALEOGEOGRAPHY, ...(saved.paleogeography || {}), layers: {} };
       saved.sceneLayers = { ...DEFAULT_SCENE_LAYERS, ...(saved.sceneLayers || {}) };
@@ -359,7 +365,7 @@ function loadState() {
     paleogeography: { ...DEFAULT_PALEOGEOGRAPHY }, sceneLayers: { ...DEFAULT_SCENE_LAYERS },
     gravity: { ...DEFAULT_GRAVITY }, stress: { ...DEFAULT_STRESS }, thermalConduction:{...DEFAULT_THERMAL_CONDUCTION}, rheology: freshRheology(), tomography: { ...DEFAULT_TOMOGRAPHY }, lithosphere: { ...DEFAULT_LITHOSPHERE },
     provenance: { tomographyModelIds: [], lithosphereModelIds: [] }, exportOptions: { ...DEFAULT_EXPORT_OPTIONS },
-    colorMaps: structuredClone(DEFAULT_COLOR_MAPS), colorMapVersion: COLOR_MAP_VERSION,
+    colorMaps: structuredClone(DEFAULT_COLOR_MAPS), colorMapVersion: COLOR_MAP_VERSION, appearanceVersion: APPEARANCE_VERSION,
     layerGroups: [], derivedFields: [], ui: { ...DEFAULT_UI }, sectionPath: []
   };
 }
@@ -442,6 +448,7 @@ function restoreProjectStateDocument(documentState) {
     },
     exportOptions: { ...DEFAULT_EXPORT_OPTIONS, ...(restored.exportOptions || {}) },
     colorMapVersion: COLOR_MAP_VERSION,
+    appearanceVersion: APPEARANCE_VERSION,
     layerGroups: Array.isArray(restored.layerGroups) ? restored.layerGroups : [],
     derivedFields: Array.isArray(restored.derivedFields) ? restored.derivedFields : [],
     ui: {
@@ -9764,6 +9771,7 @@ document.querySelector("#new-project").addEventListener("click", () => {
     exportOptions: { ...DEFAULT_EXPORT_OPTIONS },
     colorMaps: structuredClone(DEFAULT_COLOR_MAPS),
     colorMapVersion: COLOR_MAP_VERSION,
+    appearanceVersion: APPEARANCE_VERSION,
     layerGroups: [],
     derivedFields: [],
     ui: { ...DEFAULT_UI, ...(state.ui || {}) }
