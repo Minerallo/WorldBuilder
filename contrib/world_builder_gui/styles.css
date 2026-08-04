@@ -918,6 +918,9 @@ input:focus, select:focus, textarea:focus { border-color: #5e777f; box-shadow: 0
 .layer-row .form-grid { gap: 7px; }
 .layer-row > label { margin-bottom: 7px; }
 .layer-row input { padding: 6px 7px; font-size: 10px; }
+.material-editor details,.layer-material{margin-top:8px;border:1px solid var(--line);border-radius:7px;background:color-mix(in srgb,var(--panel-2) 82%,transparent)}
+.material-editor summary,.layer-material summary{display:flex;justify-content:space-between;gap:8px;padding:8px;cursor:pointer;color:var(--text);font-size:9px;font-weight:700}
+.material-editor details>.form-grid,.layer-material>.form-grid{padding:0 8px 8px}.layer-material>small,.layer-material>h4{display:block;margin:0;padding:0 8px;color:var(--muted);font-size:7px}.layer-material>h4{margin-top:8px;color:var(--teal);letter-spacing:.08em;text-transform:uppercase}.layer-material summary span{color:var(--teal);font-size:7px;text-transform:uppercase}
 .layer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 8px; }
 .layer-actions:has(:only-child) { grid-template-columns: 1fr; }
 .layer-actions button { padding: 7px; }

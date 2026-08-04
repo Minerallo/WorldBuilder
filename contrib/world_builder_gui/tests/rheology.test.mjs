@@ -28,3 +28,16 @@ test("earthquake catalog is compared with the local plastic domain", () => {
   assert.equal(result.matched, 1);
   assert.equal(result.comparisons[0].insidePlasticDomain, true);
 });
+
+test("strength profile accepts depth-dependent sublayer rheology", () => {
+  const profile = computeStrengthProfile({
+    maxDepthKm: 100, depthSamples: 5,
+    materialAt: depthKm => depthKm < 50
+      ? { name:"crust", density:2700, cohesion:40e6, frictionAngle:35 }
+      : { name:"mantle", density:3300, prefactor:1e-14, stressExponent:3 }
+  });
+  assert.equal(profile.rows[1].materialName, "crust");
+  assert.equal(profile.rows[3].materialName, "mantle");
+  assert.ok(profile.rows[3].pressure > profile.rows[2].pressure);
+  assert.notEqual(profile.rows[1].plasticPa, profile.rows[3].plasticPa);
+});

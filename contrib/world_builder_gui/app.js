@@ -51,6 +51,14 @@ const DEFAULT_THERMAL_CONDUCTION = {
   conductivity:3,heatProduction:0.02e-6,density:2800,heatCapacity:1000,useFeatures:true,
   nx:64,nz:52,timeMyr:20,mapDepthKm:20
 };
+const FEATURE_MATERIAL_PRESETS = {
+  "continental plate": { thermal:{conductivity:2.5,heatProduction:1.2e-6,heatCapacity:1000}, rheology:{} },
+  "oceanic plate": { thermal:{conductivity:3.1,heatProduction:.2e-6,heatCapacity:1000}, rheology:{} },
+  "mantle layer": { thermal:{conductivity:3.5,heatProduction:.02e-6,heatCapacity:1000}, rheology:{} },
+  plume: { thermal:{conductivity:2.7,heatProduction:.02e-6,heatCapacity:1000}, rheology:{} },
+  "subducting plate": { thermal:{conductivity:3,heatProduction:.15e-6,heatCapacity:1000}, rheology:{} },
+  fault: { thermal:{conductivity:2.3,heatProduction:.5e-6,heatCapacity:1000}, rheology:{} }
+};
 const freshRheology = () => ({ ...DEFAULT_RHEOLOGY, earthquakes: [], result: null });
 const DEFAULT_TOMOGRAPHY = {
   visible: true, opacity: 76, grid: null, sourceMode: null,
@@ -5211,12 +5219,18 @@ function thermalMaterialFields(config){
   const nx=Math.max(12,Math.round(config.nx));const nz=Math.max(12,Math.round(config.nz));const size=nx*nz;
   const conductivity=new Float64Array(size).fill(Number(config.conductivity));const heatProduction=new Float64Array(size).fill(Number(config.heatProduction));const density=new Float64Array(size).fill(Number(config.density));const heatCapacity=new Float64Array(size).fill(Number(config.heatCapacity));
   if(!config.useFeatures)return{conductivity,heatProduction,density,heatCapacity};
-  const presets={"continental plate":[2.5,1.2e-6,2800],"oceanic plate":[3.1,.2e-6,2900],"mantle layer":[3.5,.02e-6,3300],plume:[2.7,.02e-6,3200],"subducting plate":[3,.15e-6,3000],fault:[2.3,.5e-6,2700]};
   const depth=Math.max(1,state.settings.zMax-state.settings.zMin);const width=Math.max(1,state.settings.xMax-state.settings.xMin);
   state.features.filter(featureVisible).forEach(feature=>{
     const xs=feature.points.map(point=>point[0]);const left=Math.min(...xs);const right=Math.max(...xs);const radius=FEATURE_TYPES[feature.model].geometry==="point"?Number(feature.semiMajorAxis||width*.04):0;
-    const [k,h,rho]=presets[feature.model]||[config.conductivity,config.heatProduction,config.density];
-    for(let iz=0;iz<nz;iz++){const z=state.settings.zMin+depth*iz/(nz-1);if(z<Number(feature.minDepth||0)||z>Number(feature.maxDepth||depth))continue;for(let ix=0;ix<nx;ix++){const x=state.settings.xMin+width*ix/(nx-1);if(x<left-radius||x>right+radius)continue;const index=iz*nx+ix;const relativeDepth=z-Number(feature.minDepth||0);const localHeat=feature.model==="continental plate"&&relativeDepth>40000?0.02e-6:feature.model==="oceanic plate"&&relativeDepth>12000?0.02e-6:h;conductivity[index]=k;heatProduction[index]=localHeat;density[index]=rho;const layer=feature.layers?.find(item=>z>=Number(item.minDepth)&&z<=Number(item.maxDepth));if(layer?.density)density[index]=Number(layer.density);}}
+    for(let iz=0;iz<nz;iz++){
+      const z=state.settings.zMin+depth*iz/(nz-1);if(z<Number(feature.minDepth||0)||z>Number(feature.maxDepth||depth))continue;
+      const layer=feature.layers?.find(item=>z>=Number(item.minDepth)&&z<=Number(item.maxDepth));const material=inheritedMaterial(feature,"thermal",layer);
+      const relativeDepth=z-Number(feature.minDepth||0);const hasHeatOverride=layer?.material?.thermal?.heatProduction!=null||feature.material?.thermal?.heatProduction!=null;
+      const depletedLayer = (feature.model==="continental plate"&&relativeDepth>40000)
+        || (feature.model==="oceanic plate"&&relativeDepth>12000);
+      const defaultHeat = !hasHeatOverride && depletedLayer ? .02e-6 : Number(material.heatProduction);
+      for(let ix=0;ix<nx;ix++){const x=state.settings.xMin+width*ix/(nx-1);if(x<left-radius||x>right+radius)continue;const index=iz*nx+ix;conductivity[index]=Number(material.conductivity);heatProduction[index]=defaultHeat;heatCapacity[index]=Number(material.heatCapacity);density[index]=Number(layer?.density||feature.referenceDensity||config.density);}
+    }
   });
   return{conductivity,heatProduction,density,heatCapacity};
 }
@@ -5239,7 +5253,7 @@ function drawThermalMap(){const surface=stressCanvas(thermalMapCanvas);if(!surfa
 function drawThermalProfile(){const surface=stressCanvas(thermalProfileCanvas);if(!surface||!thermalConductionResult)return;const{ctx,width,height,palette}=surface;const result=thermalConductionResult;const[min,max]=thermalResultRange();const pad={left:46,right:24,top:38,bottom:32};ctx.strokeStyle=palette.grid;for(let i=0;i<=5;i++){const y=pad.top+(height-pad.top-pad.bottom)*i/5;ctx.beginPath();ctx.moveTo(pad.left,y);ctx.lineTo(width-pad.right,y);ctx.stroke();ctx.fillStyle=palette.muted;ctx.font="8px ui-monospace";ctx.fillText(`${((state.settings.zMax-state.settings.zMin)/1000*i/5).toFixed(0)} km`,4,y+3);}const colors=["#42c6ff","#ffd45b","#ff6545"],columns=[Math.round(result.nx*.25),Math.round(result.nx*.5),Math.round(result.nx*.75)];columns.forEach((column,index)=>{ctx.beginPath();for(let iz=0;iz<result.nz;iz++){const temperature=result.temperature[iz*result.nx+column];const x=pad.left+(temperature-min)/Math.max(1,max-min)*(width-pad.left-pad.right),y=pad.top+iz/(result.nz-1)*(height-pad.top-pad.bottom);iz?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.strokeStyle=colors[index];ctx.lineWidth=2;ctx.stroke();});ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText(`${min.toFixed(0)} K`,pad.left,height-10);ctx.fillText(`${max.toFixed(0)} K`,width-pad.right-42,height-10);ctx.fillText("X 25%   X 50%   X 75%",pad.left+8,pad.top-12);}
 
 function renderThermalWorkspace(){const dialog=document.querySelector("#thermal-workspace");if(!dialog?.open)return;drawThermalMap();drawThermalSection();drawThermalProfile();}
-function syncThermalConductionUI(){const config=ensureThermalConduction();const values={"thermal-mode":config.mode,"thermal-top-temperature":config.topTemperature,"thermal-bottom-temperature":config.bottomTemperature,"thermal-conductivity":config.conductivity,"thermal-heat-production":config.heatProduction*1e6,"thermal-use-features":config.useFeatures,"thermal-bottom-mode":config.bottomMode,"thermal-bottom-flux":config.bottomHeatFlux*1000,"thermal-time-myr":config.timeMyr,"thermal-density":config.density,"thermal-heat-capacity":config.heatCapacity,"thermal-nx":config.nx,"thermal-nz":config.nz,"thermal-map-depth":config.mapDepthKm};Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(!input||document.activeElement===input)return;if(input.type==="checkbox")input.checked=Boolean(value);else input.value=value;});const range=document.querySelector("#thermal-temperature-range");if(thermalConductionResult){const[min,max]=thermalResultRange();range.textContent=`${min.toFixed(0)}–${max.toFixed(0)} K`;}else range.textContent="Not solved";}
+function syncThermalConductionUI(){const config=ensureThermalConduction();const values={"thermal-mode":config.mode,"thermal-top-temperature":config.topTemperature,"thermal-bottom-temperature":config.bottomTemperature,"thermal-conductivity":config.conductivity,"thermal-heat-production":config.heatProduction*1e6,"thermal-use-features":config.useFeatures,"thermal-bottom-mode":config.bottomMode,"thermal-bottom-flux":config.bottomHeatFlux*1000,"thermal-time-myr":config.timeMyr,"thermal-density":config.density,"thermal-heat-capacity":config.heatCapacity,"thermal-nx":config.nx,"thermal-nz":config.nz,"thermal-map-depth":config.mapDepthKm};Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(!input||document.activeElement===input)return;if(input.type==="checkbox")input.checked=Boolean(value);else input.value=value;});const range=document.querySelector("#thermal-temperature-range");if(thermalConductionResult){const[min,max]=thermalResultRange();range.textContent=`${min.toFixed(0)}–${max.toFixed(0)} K`;}else range.textContent="Not solved";const source=document.querySelector("#thermal-material-source");if(source)source.textContent=materialOverrideSummary("thermal");}
 function thermalCsv(){if(!thermalConductionResult)return"";const rows=["x_m,depth_m,temperature_K,conductivity_W_mK,heat_production_W_m3"];const r=thermalConductionResult;for(let iz=0;iz<r.nz;iz++)for(let ix=0;ix<r.nx;ix++){const i=iz*r.nx+ix;rows.push([state.settings.xMin+r.width*ix/(r.nx-1),r.depth*iz/(r.nz-1),r.temperature[i],r.conductivity[i],r.heatProduction[i]].join(","));}return`${rows.join("\n")}\n`;}
 async function exportThermalScreenshot(){try{renderThermalWorkspace();const grid=document.querySelector("#thermal-workspace-grid");const image=composeCanvasLayout([{source:thermalMapCanvas,label:"Temperature map"},{source:thermalSectionCanvas,label:"Conductive section"},{source:thermalProfileCanvas,label:"Geotherm"}],grid);downloadBlob(screenshotName(`gwb-thermal-conduction-${grid.dataset.layout}`),await canvasToPngBlob(image));showToast("Thermal workspace PNG saved");}catch{showToast("Thermal screenshot could not be encoded");}}
 
@@ -5252,7 +5266,13 @@ function rheologyColumnOptions(x,y){
   return{...config,result:undefined,earthquakes:undefined,density,gravity:Number(state.settings.gravityMagnitude||config.gravity),dimension:Number(state.settings.dimension||3),maxDepthKm,
     temperatureAt(depthKm){
       if(thermalConductionResult){const ix=Math.max(0,Math.min(thermalConductionResult.nx-1,Math.round((x-state.settings.xMin)/Math.max(1,state.settings.xMax-state.settings.xMin)*(thermalConductionResult.nx-1))));const iz=Math.max(0,Math.min(thermalConductionResult.nz-1,Math.round(depthKm/maxDepthKm*(thermalConductionResult.nz-1))));return thermalConductionResult.temperature[iz*thermalConductionResult.nx+ix];}
-      return Number(config.surfaceTemperature)+(targetTemperature-Number(config.surfaceTemperature))*Math.min(1,depthKm/maxDepthKm);
+      const layer=feature?.layers?.find(item=>depthKm*1000>=Number(item.minDepth)&&depthKm*1000<=Number(item.maxDepth));const base=Number(layer?.temperature||targetTemperature);
+      return Number(config.surfaceTemperature)+(base-Number(config.surfaceTemperature))*Math.min(1,depthKm/maxDepthKm);
+    },
+    materialAt(depthKm){
+      const layer=feature?.layers?.find(item=>depthKm*1000>=Number(item.minDepth)&&depthKm*1000<=Number(item.maxDepth));
+      const rheology=feature?inheritedMaterial(feature,"rheology",layer):config;
+      return{...rheology,name:layer?.name||feature?.name||"Workspace material",density:Number(layer?.density||feature?.referenceDensity||config.density)};
     }};
 }
 function rheologyBdtAt(x,y){const result=rheologyResult||ensureRheology().result;if(!result)return null;const col=Math.max(0,Math.min(result.nx-1,Math.floor((x-result.bounds.xMin)/Math.max(1e-12,result.bounds.xMax-result.bounds.xMin)*result.nx)));const row=Math.max(0,Math.min(result.ny-1,Math.floor((y-result.bounds.yMin)/Math.max(1e-12,result.bounds.yMax-result.bounds.yMin)*result.ny)));return result.values[row*result.nx+col];}
@@ -5269,7 +5289,7 @@ function drawRheologyPlanOverlay(){
   if(sceneLayerVisible("seismicity")&&ensureRheology().showSeismicity!==false){context.save();ensureRheology().earthquakes.forEach(event=>{const p=worldToCanvas(earthquakeModelPoint(event));context.fillStyle=event.depthKm<=(rheologyBdtAt(...earthquakeModelPoint(event))??-1)?"#ffe25e":"#ff5a70";context.strokeStyle="#101519";context.lineWidth=1;context.beginPath();context.arc(...p,Math.max(2.5,Math.min(7,2+Number(event.magnitude||0)*.6)),0,Math.PI*2);context.fill();context.stroke();});context.restore();}
 }
 function drawRheologySectionLine(section,metrics,pad,plotWidth,plotHeight,maxDepth){if(!sceneLayerVisible("rheologyBdt")||!rheologyResult&&!ensureRheology().result)return;context.save();context.strokeStyle="#ffe25e";context.shadowColor="#101519";context.shadowBlur=2;context.lineWidth=3;context.beginPath();for(let i=0;i<=120;i++){const point=pointAlongSectionPath(metrics.total*i/120,section,metrics);const depth=(rheologyBdtAt(point[0],point[1])||0)*1000;const x=pad.left+plotWidth*i/120,y=pad.top+depth/maxDepth*plotHeight;i?context.lineTo(x,y):context.moveTo(x,y);}context.stroke();context.shadowBlur=0;context.fillStyle="#ffe25e";context.font="700 9px ui-monospace";context.fillText("BDT",pad.left+6,pad.top+16);context.restore();}
-function syncRheologyUI(){const r=ensureRheology();const values={"rheology-strain-rate":r.strainRate,"rheology-prefactor":r.prefactor,"rheology-exponent":r.stressExponent,"rheology-energy":r.activationEnergy/1000,"rheology-volume":r.activationVolume*1e6,"rheology-friction":r.frictionAngle,"rheology-cohesion":r.cohesion/1e6,"rheology-yield-cap":r.maxYieldStress/1e6,"rheology-density":r.density};Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(input&&document.activeElement!==input)input.value=value;});document.querySelector("#show-rheology-bdt").checked=r.showBdt!==false;document.querySelector("#show-rheology-seismicity").checked=r.showSeismicity!==false;const result=rheologyResult||r.result;document.querySelector("#rheology-bdt-range").textContent=result&&Number.isFinite(result.min)?`BDT ${result.min.toFixed(1)}–${result.max.toFixed(1)} km`:"Not computed";const match=result?.seismicity;document.querySelector("#rheology-match").textContent=match?.comparable?`${match.matched}/${match.comparable} earthquakes within predicted plastic domain (${match.matchPercent.toFixed(0)}%)`:"No comparable seismicity";document.querySelector("#seismicity-status").textContent=r.earthquakes.length?`${r.earthquakes.length.toLocaleString()} events loaded`:"No events loaded.";}
+function syncRheologyUI(){const r=ensureRheology();const values={"rheology-strain-rate":r.strainRate,"rheology-prefactor":r.prefactor,"rheology-exponent":r.stressExponent,"rheology-energy":r.activationEnergy/1000,"rheology-volume":r.activationVolume*1e6,"rheology-friction":r.frictionAngle,"rheology-cohesion":r.cohesion/1e6,"rheology-yield-cap":r.maxYieldStress/1e6,"rheology-density":r.density};Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(input&&document.activeElement!==input)input.value=value;});document.querySelector("#show-rheology-bdt").checked=r.showBdt!==false;document.querySelector("#show-rheology-seismicity").checked=r.showSeismicity!==false;const result=rheologyResult||r.result;document.querySelector("#rheology-bdt-range").textContent=result&&Number.isFinite(result.min)?`BDT ${result.min.toFixed(1)}–${result.max.toFixed(1)} km`:"Not computed";const match=result?.seismicity;document.querySelector("#rheology-match").textContent=match?.comparable?`${match.matched}/${match.comparable} earthquakes within predicted plastic domain (${match.matchPercent.toFixed(0)}%)`:"No comparable seismicity";document.querySelector("#seismicity-status").textContent=r.earthquakes.length?`${r.earthquakes.length.toLocaleString()} events loaded`:"No events loaded.";const source=document.querySelector("#rheology-material-source");if(source)source.textContent=materialOverrideSummary("rheology");}
 function drawRheologyMap(){const surface=stressCanvas(rheologyMapCanvas);if(!surface)return;const{ctx,width,height,palette}=surface;const result=rheologyResult||ensureRheology().result;const project=stressProjector(width,height);drawStressGrid(ctx,width,height,project);if(result){for(let row=0;row<result.ny;row++)for(let col=0;col<result.nx;col++){const value=result.values[row*result.nx+col];if(!Number.isFinite(value))continue;const a=project([result.bounds.xMin+col/result.nx*(result.bounds.xMax-result.bounds.xMin),result.bounds.yMin+row/result.ny*(result.bounds.yMax-result.bounds.yMin)]),b=project([result.bounds.xMin+(col+1)/result.nx*(result.bounds.xMax-result.bounds.xMin),result.bounds.yMin+(row+1)/result.ny*(result.bounds.yMax-result.bounds.yMin)]);ctx.fillStyle=bdtColor(value,result.min,result.max);ctx.globalAlpha=.7;ctx.fillRect(a[0],b[1],b[0]-a[0]+1,a[1]-b[1]+1);}ctx.globalAlpha=1;}drawStressFeatures(ctx,project);ensureRheology().earthquakes.forEach(event=>{const p=project(earthquakeModelPoint(event));const local=rheologyBdtAt(...earthquakeModelPoint(event));ctx.fillStyle=event.depthKm<=(local??-1)?"#ffe25e":"#ff5a70";ctx.strokeStyle=palette.background;ctx.beginPath();ctx.arc(...p,Math.max(3,Math.min(8,2+Number(event.magnitude||0)*.7)),0,Math.PI*2);ctx.fill();ctx.stroke();});ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText(result?`BDT ${result.min.toFixed(1)}–${result.max.toFixed(1)} km · yellow: within plastic domain · red: below BDT`:"Compute the rheological model",40,height-14);}
 function drawRheologySection(){const surface=stressCanvas(rheologySectionCanvas);if(!surface)return;const{ctx,width,height,palette}=surface;const section=activeSectionPath(),metrics=sectionPathMetrics(section),pad={left:48,right:18,top:36,bottom:28},maxDepthKm=Math.max(1,(state.settings.zMax-state.settings.zMin)/1000),pw=width-pad.left-pad.right,ph=height-pad.top-pad.bottom;ctx.strokeStyle=palette.grid;for(let i=0;i<=5;i++){const y=pad.top+ph*i/5;ctx.beginPath();ctx.moveTo(pad.left,y);ctx.lineTo(width-pad.right,y);ctx.stroke();ctx.fillStyle=palette.muted;ctx.font="8px ui-monospace";ctx.fillText(`${(maxDepthKm*i/5).toFixed(0)} km`,4,y+3);}if(rheologyResult||ensureRheology().result){ctx.strokeStyle="#ffe25e";ctx.lineWidth=3;ctx.beginPath();for(let i=0;i<=100;i++){const point=pointAlongSectionPath(metrics.total*i/100,section,metrics),depth=rheologyBdtAt(...point)||0,x=pad.left+pw*i/100,y=pad.top+ph*depth/maxDepthKm;i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}ensureRheology().earthquakes.forEach(event=>{const p=earthquakeModelPoint(event);let best={distance:Infinity,along:0};for(let i=0;i<=100;i++){const along=metrics.total*i/100,q=pointAlongSectionPath(along,section,metrics),distance=Math.hypot(q[0]-p[0],q[1]-p[1]);if(distance<best.distance)best={distance,along};}const x=pad.left+pw*best.along/Math.max(1,metrics.total),y=pad.top+ph*event.depthKm/maxDepthKm;ctx.fillStyle="#ff5a70";ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill();});}
 function drawRheologyProfile(){const surface=stressCanvas(rheologyProfileCanvas);if(!surface)return;const{ctx,width,height,palette}=surface;const x=(state.settings.xMin+state.settings.xMax)/2,y=(state.settings.yMin+state.settings.yMax)/2,profile=computeStrengthProfile(rheologyColumnOptions(x,y)),pad={left:48,right:22,top:36,bottom:30},maxStress=Math.max(...profile.rows.flatMap(row=>[Math.min(row.plasticPa,2e9),Math.min(row.viscousPa,2e9)])),maxDepth=profile.maxDepthKm,px=value=>pad.left+Math.min(value,maxStress)/maxStress*(width-pad.left-pad.right),py=depth=>pad.top+depth/maxDepth*(height-pad.top-pad.bottom);[["plasticPa","#ff7657","plastic"],["viscousPa","#53c9e8","viscous"],["differentialStressPa","#f4df66","strength"]].forEach(([key,color])=>{ctx.beginPath();profile.rows.forEach((row,i)=>{const p=[px(row[key]),py(row.depthKm)];i?ctx.lineTo(...p):ctx.moveTo(...p);});ctx.strokeStyle=color;ctx.lineWidth=2;ctx.stroke();});if(Number.isFinite(profile.bdtDepthKm)){ctx.strokeStyle="#ffe25e";ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(pad.left,py(profile.bdtDepthKm));ctx.lineTo(width-pad.right,py(profile.bdtDepthKm));ctx.stroke();ctx.setLineDash([]);}ctx.fillStyle=palette.text;ctx.font="9px ui-monospace";ctx.fillText("plastic · viscous · governing strength",pad.left,pad.top-12);ctx.fillText(`${(maxStress/1e6).toFixed(0)} MPa`,width-pad.right-55,height-10);}
@@ -5700,6 +5720,73 @@ function layerRange(feature) {
     : [Number(feature.minDepth), Number(feature.maxDepth)];
 }
 
+const MATERIAL_FIELD_META = {
+  thermal: {
+    conductivity:["Conductivity (W/m/K)",1,"0.1"], heatProduction:["Heat production (µW/m³)",1e6,"0.01"], heatCapacity:["Heat capacity (J/kg/K)",1,"10"]
+  },
+  rheology: {
+    strainRate:["Strain rate (s⁻¹)",1,"any"], prefactor:["Creep prefactor A",1,"any"], stressExponent:["Stress exponent n",1,"0.1"],
+    activationEnergy:["Activation E (kJ/mol)",1e-3,"1"], activationVolume:["Activation V (cm³/mol)",1e6,"0.1"],
+    frictionAngle:["Friction angle (°)",1,"1"], cohesion:["Cohesion (MPa)",1e-6,"1"], maxYieldStress:["Yield cap (MPa)",1e-6,"10"]
+  }
+};
+
+function inheritedMaterial(feature, group, layer = null) {
+  const workspace = group === "thermal"
+    ? { conductivity:ensureThermalConduction().conductivity, heatProduction:ensureThermalConduction().heatProduction, heatCapacity:ensureThermalConduction().heatCapacity }
+    : ensureRheology();
+  return { ...workspace, ...(FEATURE_MATERIAL_PRESETS[feature.model]?.[group] || {}), ...(feature.material?.[group] || {}), ...(layer?.material?.[group] || {}) };
+}
+
+function materialOverrideSummary(group) {
+  let features=0,layers=0;
+  state.features.forEach(feature=>{if(Object.keys(feature.material?.[group]||{}).length)features++;layers+=(feature.layers||[]).filter(layer=>Object.keys(layer.material?.[group]||{}).length).length;});
+  return features||layers?`${features} feature override${features===1?"":"s"} · ${layers} sublayer override${layers===1?"":"s"}`:"Workspace defaults → feature-type preset → sublayer";
+}
+
+function materialInputs(feature, group, layer = null, layerIndex = null) {
+  const effective = inheritedMaterial(feature, group, layer);
+  const source = layer ? layer.material?.[group] : feature.material?.[group];
+  return Object.entries(MATERIAL_FIELD_META[group]).map(([key,[label,scale,step]]) => {
+    const explicit = source?.[key];
+    const value = explicit == null ? "" : Number(explicit) * scale;
+    const placeholder = Number(effective[key]) * scale;
+    const attrs = layer
+      ? `data-layer-material-group="${group}" data-layer-material-key="${key}" data-layer-index="${layerIndex}"`
+      : `data-feature-material-group="${group}" data-feature-material-key="${key}"`;
+    return `<label>${label}<input ${attrs} type="number" step="${step}" value="${value}" placeholder="inherit ${Number(placeholder).toPrecision(4)}"></label>`;
+  }).join("");
+}
+
+function setMaterialOverride(holder, group, key, rawValue) {
+  if (rawValue === "") {
+    if (holder.material?.[group]) delete holder.material[group][key];
+    if (holder.material?.[group] && !Object.keys(holder.material[group]).length) delete holder.material[group];
+    if (holder.material && !Object.keys(holder.material).length) delete holder.material;
+    return;
+  }
+  const scale = MATERIAL_FIELD_META[group][key][1];
+  holder.material ||= {};
+  holder.material[group] ||= {};
+  holder.material[group][key] = Number(rawValue) / scale;
+}
+
+function featureMaterialEditor(feature) {
+  return `<div class="field-group material-editor"><h3>Analysis material <span class="framework-badge">shared</span></h3>
+    <p class="layer-note">Used by Thermal conduction and Rheology. Empty fields inherit the feature-type preset, then workspace defaults.</p>
+    <details><summary>Thermal properties</summary><div class="form-grid">${materialInputs(feature,"thermal")}</div></details>
+    <details><summary>Rheological properties</summary><div class="form-grid">${materialInputs(feature,"rheology")}</div></details>
+  </div>`;
+}
+
+function layerMaterialEditor(feature, layer, index) {
+  return `<details class="layer-material"><summary>Analysis overrides <span>${layer.material ? "custom" : "inherits"}</span></summary>
+    <small>Blank values inherit the feature material.</small>
+    <h4>Thermal</h4><div class="form-grid">${materialInputs(feature,"thermal",layer,index)}</div>
+    <h4>Rheology</h4><div class="form-grid">${materialInputs(feature,"rheology",layer,index)}</div>
+  </details>`;
+}
+
 function layerEditor(feature) {
   const layers = feature.layers || [];
   const [rangeTop, rangeBottom] = layerRange(feature);
@@ -5737,13 +5824,14 @@ function layerEditor(feature) {
               <label>Temperature (K)<input data-layer-key="temperature" data-layer-index="${index}" type="number" step="10" value="${Number(layer.temperature)}"></label>
               <label>Density (kg/m³)<input data-layer-key="density" data-layer-index="${index}" type="number" min="0" step="10" value="${Number(layer.density || feature.referenceDensity || 3300)}"></label>
             </div>
+            ${layerMaterialEditor(feature,layer,index)}
           </div>`).join("")}
       </div>
       <div class="layer-actions">
         <button id="add-layer" class="ghost">Add depth interval</button>
         ${layers.length ? `<button id="clear-layers" class="ghost">Remove split</button>` : ""}
       </div>
-      <p class="layer-note">${layers.length ? "Layer values override the single composition and thermal fields above." : "Split equally, or add intervals and type exact top and bottom depths."}</p>
+      <p class="layer-note">${layers.length ? "Layer values override feature composition, temperature, density, and optional analysis material properties." : "Split equally, or add intervals and type exact top and bottom depths."}</p>
     </div>`;
 }
 
@@ -5832,6 +5920,13 @@ function bindLayerEditor(panel, feature) {
     syncCompositionCount();
     updateAll(false);
   }));
+  panel.querySelectorAll("[data-layer-material-key]").forEach(input => input.addEventListener("change", () => {
+    const layer = feature.layers[Number(input.dataset.layerIndex)];
+    setMaterialOverride(layer,input.dataset.layerMaterialGroup,input.dataset.layerMaterialKey,input.value);
+    thermalConductionResult=null;rheologyResult=null;ensureRheology().result=null;
+    feature.analysisMaterialEdited=true;
+    updateAll(false);renderInspector();
+  }));
 }
 
 function renderInspector() {
@@ -5912,6 +6007,7 @@ function renderInspector() {
       </div>
     </div>
     ${densityFields}
+    ${featureMaterialEditor(feature)}
     ${layerEditor(feature)}
     <details class="advanced-editor">
       <summary>Advanced feature parameters <span>Lossless JSON</span></summary>
@@ -5922,6 +6018,12 @@ function renderInspector() {
       </div>
     </details>`;
   panel.querySelectorAll("[data-feature-key]").forEach(input => input.addEventListener("input", onFeatureInput));
+  panel.querySelectorAll("[data-feature-material-key]").forEach(input => input.addEventListener("change", () => {
+    setMaterialOverride(feature,input.dataset.featureMaterialGroup,input.dataset.featureMaterialKey,input.value);
+    thermalConductionResult=null;rheologyResult=null;ensureRheology().result=null;
+    feature.analysisMaterialEdited=true;
+    updateAll(false);renderInspector();
+  }));
   bindLayerEditor(panel, feature);
   panel.querySelector("#open-section-profile")?.addEventListener("click", () => {
     setViewportMode(activeViewport, "section");

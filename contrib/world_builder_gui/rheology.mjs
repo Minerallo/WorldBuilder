@@ -46,22 +46,29 @@ export function computeStrengthProfile(options = {}) {
   const maxDepthKm = Math.max(1, Number(config.maxDepthKm ?? 400));
   const count = Math.max(3, Math.round(Number(config.depthSamples)));
   const rows = [];
+  let pressure = 0;
+  let previousDepthM = 0;
+  let previousDensity = Number(config.density);
   for (let index = 0; index < count; index += 1) {
     const depthKm = index / (count - 1) * maxDepthKm;
     const depthM = depthKm * 1000;
-    const pressure = Number(config.density) * Number(config.gravity) * depthM;
+    const material = typeof config.materialAt === "function" ? (config.materialAt(depthKm) || {}) : {};
+    const density = Number(material.density ?? config.density);
+    if (index > 0) pressure += 0.5 * (previousDensity + density) * Number(config.gravity) * (depthM - previousDepthM);
     const temperature = typeof config.temperatureAt === "function"
       ? Number(config.temperatureAt(depthKm))
       : Number(config.surfaceTemperature) + depthKm / maxDepthKm * (Number(config.mantleTemperature) - Number(config.surfaceTemperature));
     const plastic = druckerPragerYield({
-      cohesion: config.cohesion, frictionAngle: config.frictionAngle, pressure,
-      dimension: config.dimension, maxYieldStress: config.maxYieldStress
+      cohesion: material.cohesion ?? config.cohesion, frictionAngle: material.frictionAngle ?? config.frictionAngle, pressure,
+      dimension: config.dimension, maxYieldStress: material.maxYieldStress ?? config.maxYieldStress
     });
     const viscous = dislocationStress({
-      strainRate: config.strainRate, prefactor: config.prefactor, stressExponent: config.stressExponent,
-      activationEnergy: config.activationEnergy, activationVolume: config.activationVolume, pressure, temperature
+      strainRate: material.strainRate ?? config.strainRate, prefactor: material.prefactor ?? config.prefactor, stressExponent: material.stressExponent ?? config.stressExponent,
+      activationEnergy: material.activationEnergy ?? config.activationEnergy, activationVolume: material.activationVolume ?? config.activationVolume, pressure, temperature
     });
-    rows.push({ depthKm, pressure, temperature, plasticPa: plastic, viscousPa: viscous, differentialStressPa: Math.min(plastic, viscous), regime: plastic <= viscous ? "plastic" : "viscous" });
+    rows.push({ depthKm, pressure, temperature, density, materialName: material.name || "Inherited material", plasticPa: plastic, viscousPa: viscous, differentialStressPa: Math.min(plastic, viscous), regime: plastic <= viscous ? "plastic" : "viscous" });
+    previousDepthM = depthM;
+    previousDensity = density;
   }
   let bdtDepthKm = null;
   for (let index = 1; index < rows.length; index += 1) {
