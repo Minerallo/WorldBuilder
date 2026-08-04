@@ -668,6 +668,11 @@ body[data-theme="light"] .statistics-workspace{background:#f8faf9}.statistics-wo
   font-size: 9px;
 }
 .toolbar-check input { accent-color: var(--accent); }
+.mesh-toolbar-check {
+  color: #9cebd8;
+  border-top: 1px solid rgba(114, 211, 188, .16);
+  padding-top: 8px;
+}
 .layer-row.section-active {
   border-color: #caa84e;
   box-shadow: 0 0 0 1px rgba(240, 202, 102, .2);

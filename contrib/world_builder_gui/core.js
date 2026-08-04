@@ -42,6 +42,24 @@ export const DEFAULT_SETTINGS = {
 const roundCoordinate = value => Number(Number(value).toFixed(6));
 const clone = value => value == null ? value : JSON.parse(JSON.stringify(value));
 
+export function clipSegmentToBounds(a, b, bounds, dimension = 3) {
+  let enter = 0;
+  let exit = 1;
+  const clipAxis = (start, delta, lower, upper) => {
+    if (Math.abs(delta) < 1e-14) return start >= lower && start <= upper;
+    let first = (lower - start) / delta;
+    let second = (upper - start) / delta;
+    if (first > second) [first, second] = [second, first];
+    enter = Math.max(enter, first);
+    exit = Math.min(exit, second);
+    return enter <= exit;
+  };
+  if (!clipAxis(Number(a[0]), Number(b[0]) - Number(a[0]), Number(bounds[0]), Number(bounds[1]))) return null;
+  if (dimension === 3
+    && !clipAxis(Number(a[1]), Number(b[1]) - Number(a[1]), Number(bounds[2]), Number(bounds[3]))) return null;
+  return enter <= exit ? [Math.max(0, enter), Math.min(1, exit)] : null;
+}
+
 export function createPlacementPoints(geometry, x, y, shape, spherical = false) {
   if (geometry === "point") return [[x, y]];
   const spanX = spherical ? 4 : geometry === "line" ? 80000 : 90000;

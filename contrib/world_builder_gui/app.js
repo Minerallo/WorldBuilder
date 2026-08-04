@@ -3,7 +3,7 @@ import {
   buildLegacyVtk, buildObj, buildGeoJson, buildGeometryCsv,
   connectFeatures, validateProject, importWorldBuilder, importFeature,
   applyGridConfig, featureToWorldBuilder, geologicalLayerPreset, createPlacementPoints,
-  deriveSubductionDipPoint, applyFieldOperation
+  deriveSubductionDipPoint, applyFieldOperation, clipSegmentToBounds
 } from "./core.js";
 import { TOMOGRAPHY_CATALOG, searchTomographyModels, tomographyModelById } from "./tomography-catalog.mjs";
 import { LITHOSPHERE_CATALOG, searchLithosphereModels, lithosphereModelById } from "./lithosphere-catalog.mjs";
@@ -101,7 +101,7 @@ const DEFAULT_SCENE_LAYERS = {
 const DEFAULT_UI = {
   paletteCollapsed: false, inspectorCollapsed: false, splitView: false,
   linkedCameras: true, secondaryView: "three-d", secondaryCamera: null,
-  sectionPlaneVisible: true, sectionPreset: "custom",
+  sectionPlaneVisible: true, adaptiveSectionMeshVisible: true, sectionPreset: "custom",
   cameraControls: null, floatingEditors: {}, areaPlacementShape: "rectangle", linePlacementShape: "straight",
   gravityLegendPositions: { primary: null, secondary: null },
   cameraControlsExpanded: false,
@@ -2346,68 +2346,45 @@ function adaptiveTemperatureAt(result, u, v, w) {
 function drawAdaptiveMeshSection(section, metrics, pad, plotWidth, plotHeight) {
   const result = computedModel?.result;
   if (!result?.adaptive
-    || !document.querySelector("#computation-show-adaptive-mesh")?.checked
+    || state.ui.adaptiveSectionMeshVisible === false
     || !result.cellLevels?.length
     || !(metrics.total > 0)) return;
 
-  const columns = Math.max(64, Math.min(280, Math.ceil(plotWidth / 3)));
-  const rows = Math.max(48, Math.min(180, Math.ceil(plotHeight / 3)));
-  const sampledCells = new Int32Array(columns * rows);
-  sampledCells.fill(-1);
-  for (let row = 0; row < rows; row++) {
-    const depthFraction = (row + .5) / rows;
-    const w = 1 - depthFraction;
-    for (let column = 0; column < columns; column++) {
-      const distance = (column + .5) / columns * metrics.total;
-      const point = pointAlongSectionPath(distance, section, metrics);
-      const u = (point[0] - Number(state.settings.xMin))
-        / Math.max(1e-12, Number(state.settings.xMax) - Number(state.settings.xMin));
-      const v = result.dimension === 3
-        ? (point[1] - Number(state.settings.yMin))
-          / Math.max(1e-12, Number(state.settings.yMax) - Number(state.settings.yMin))
-        : 0;
-      sampledCells[row * columns + column] = adaptiveCellAt(result, u, v, w);
-    }
-  }
-
-  const xStep = plotWidth / columns;
-  const yStep = plotHeight / rows;
-  const paths = Array.from(
+  const normalize = point => [
+    (Number(point[0]) - Number(state.settings.xMin))
+      / Math.max(1e-12, Number(state.settings.xMax) - Number(state.settings.xMin)),
+    (Number(point[1]) - Number(state.settings.yMin))
+      / Math.max(1e-12, Number(state.settings.yMax) - Number(state.settings.yMin))
+  ];
+  const normalizedSection = section.map(normalize);
+  const cellsByLevel = Array.from(
     { length: Number(result.adaptiveMaximumLevel) + 1 },
     () => []
   );
-  const addBoundary = (cellA, cellB, x1, y1, x2, y2) => {
-    if (cellA === cellB || cellA < 0 || cellB < 0) return;
-    const level = Math.max(
-      Number(result.cellLevels[cellA]) || 0,
-      Number(result.cellLevels[cellB]) || 0
-    );
-    paths[Math.min(paths.length - 1, level)].push([x1, y1, x2, y2]);
-  };
-
-  for (let row = 0; row < rows; row++) {
-    for (let column = 0; column < columns; column++) {
-      const cell = sampledCells[row * columns + column];
-      if (column > 0) {
-        addBoundary(
-          sampledCells[row * columns + column - 1],
-          cell,
-          pad.left + column * xStep,
-          pad.top + row * yStep,
-          pad.left + column * xStep,
-          pad.top + (row + 1) * yStep
-        );
-      }
-      if (row > 0) {
-        addBoundary(
-          sampledCells[(row - 1) * columns + column],
-          cell,
-          pad.left + column * xStep,
-          pad.top + row * yStep,
-          pad.left + (column + 1) * xStep,
-          pad.top + row * yStep
-        );
-      }
+  for (let cell = 0; cell < result.cellLevels.length; cell++) {
+    const offset = cell * 6;
+    const u0 = Number(result.cellBounds[offset]);
+    const u1 = Number(result.cellBounds[offset + 1]);
+    const v0 = Number(result.cellBounds[offset + 2]);
+    const v1 = Number(result.cellBounds[offset + 3]);
+    const w0 = Number(result.cellBounds[offset + 4]);
+    const w1 = Number(result.cellBounds[offset + 5]);
+    const level = Math.max(0, Math.min(cellsByLevel.length - 1,
+      Number(result.cellLevels[cell]) || 0));
+    for (let segment = 0; segment < normalizedSection.length - 1; segment++) {
+      const clipped = clipSegmentToBounds(
+        normalizedSection[segment], normalizedSection[segment + 1],
+        [u0, u1, v0, v1], result.dimension
+      );
+      if (!clipped || clipped[1] - clipped[0] < 1e-10) continue;
+      const startDistance = metrics.cumulative[segment] + clipped[0] * metrics.lengths[segment];
+      const endDistance = metrics.cumulative[segment] + clipped[1] * metrics.lengths[segment];
+      cellsByLevel[level].push({
+        x: pad.left + startDistance / metrics.total * plotWidth,
+        y: pad.top + (1 - w1) * plotHeight,
+        width: Math.max(.5, (endDistance - startDistance) / metrics.total * plotWidth),
+        height: Math.max(.5, (w1 - w0) * plotHeight)
+      });
     }
   }
 
@@ -2415,26 +2392,28 @@ function drawAdaptiveMeshSection(section, metrics, pad, plotWidth, plotHeight) {
   context.beginPath();
   context.rect(pad.left, pad.top, plotWidth, plotHeight);
   context.clip();
-  context.shadowColor = "rgba(84,231,200,.45)";
-  context.shadowBlur = 2;
-  paths.forEach((segments, level) => {
-    if (!segments.length) return;
-    const fraction = paths.length > 1 ? level / (paths.length - 1) : 0;
-    context.strokeStyle = `hsla(${178 - fraction * 42}, 78%, ${62 + fraction * 12}%, .82)`;
-    context.lineWidth = level === 0 ? 1.1 : 1.6;
+  context.shadowColor = "rgba(84,231,200,.65)";
+  context.shadowBlur = 2.5;
+  cellsByLevel.forEach((cells, level) => {
+    if (!cells.length) return;
+    const fraction = cellsByLevel.length > 1 ? level / (cellsByLevel.length - 1) : 0;
+    context.fillStyle = `hsla(${178 - fraction * 42}, 75%, 58%, ${.025 + fraction * .035})`;
+    context.strokeStyle = `hsla(${178 - fraction * 42}, 88%, ${67 + fraction * 13}%, ${.72 + fraction * .24})`;
+    context.lineWidth = .85 + fraction * 1.15;
     context.beginPath();
-    segments.forEach(([x1, y1, x2, y2]) => {
-      context.moveTo(x1, y1);
-      context.lineTo(x2, y2);
+    cells.forEach(cell => {
+      context.rect(cell.x, cell.y, cell.width, cell.height);
     });
+    context.fill();
     context.stroke();
   });
-  context.strokeStyle = "rgba(141,224,205,.9)";
-  context.lineWidth = 1;
+  context.shadowBlur = 4;
+  context.strokeStyle = "rgba(164,255,232,.98)";
+  context.lineWidth = 1.4;
   context.strokeRect(pad.left, pad.top, plotWidth, plotHeight);
   context.restore();
 
-  const label = `ADAPTIVE ${result.dimension === 3 ? "OCTREE" : "QUADTREE"}`
+  const label = `MESH ON · ADAPTIVE ${result.dimension === 3 ? "OCTREE" : "QUADTREE"}`
     + ` · ${Number(result.leafCellCount).toLocaleString()} LEAVES`
     + ` · L0–L${result.adaptiveMaximumLevel}`;
   context.save();
@@ -3032,6 +3011,23 @@ function syncSectionPlaneControls() {
   document.querySelectorAll("[data-section-preset]").forEach(button => {
     button.classList.toggle("active", button.dataset.sectionPreset === state.ui.sectionPreset);
   });
+  syncAdaptiveSectionMeshControls();
+}
+
+function syncAdaptiveSectionMeshControls() {
+  const visible = state.ui.adaptiveSectionMeshVisible !== false;
+  ["#show-adaptive-section-mesh", "#computation-show-adaptive-mesh"].forEach(selector => {
+    const input = document.querySelector(selector);
+    if (input) input.checked = visible;
+  });
+}
+
+function setAdaptiveSectionMeshVisible(visible) {
+  state.ui.adaptiveSectionMeshVisible = Boolean(visible);
+  syncAdaptiveSectionMeshControls();
+  persist();
+  draw();
+  showToast(visible ? "Adaptive mesh visible in depth sections" : "Adaptive mesh hidden in depth sections");
 }
 
 function applySectionPreset(axis) {
@@ -8931,6 +8927,9 @@ document.querySelector("#show-section-plane-3d").addEventListener("change", even
   draw();
   showToast(event.target.checked ? "Section plane visible in 3D" : "Section plane hidden in 3D");
 });
+document.querySelector("#show-adaptive-section-mesh").addEventListener("change", event => {
+  setAdaptiveSectionMeshVisible(event.target.checked);
+});
 document.querySelector("#link-cameras").addEventListener("click", () => {
   state.ui.linkedCameras = !state.ui.linkedCameras;
   if (state.ui.linkedCameras) {
@@ -9057,7 +9056,9 @@ document.querySelector("#compute-isostatic-topography").addEventListener("click"
 document.querySelector("#compute-isostatic-topography-inline").addEventListener("click", () => runModelComputation("isostatic"));
 document.querySelector("#cancel-computation").addEventListener("click", () => computationAbortController?.abort());
 document.querySelector("#computation-sampling").addEventListener("change", syncComputationUI);
-document.querySelector("#computation-show-adaptive-mesh").addEventListener("change", draw);
+document.querySelector("#computation-show-adaptive-mesh").addEventListener("change", event => {
+  setAdaptiveSectionMeshVisible(event.target.checked);
+});
 document.querySelector("#computation-depth").addEventListener("input", event => {
   if (computedModel) computedModel.depthKm = Number(event.target.value);
   draw();

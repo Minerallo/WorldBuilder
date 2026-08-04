@@ -4,7 +4,8 @@ import {
   DEFAULT_SETTINGS, createFeature, buildWorldBuilder, buildGrid, buildVtp,
   buildLegacyVtk, buildObj, buildGeoJson, buildGeometryCsv,
   connectFeatures, validateProject, importWorldBuilder, applyGridConfig,
-  geologicalLayerPreset, createPlacementPoints, deriveSubductionDipPoint, applyFieldOperation
+  geologicalLayerPreset, createPlacementPoints, deriveSubductionDipPoint, applyFieldOperation,
+  clipSegmentToBounds
 } from "../core.js";
 import { PLANETARY_BODY_CATALOG, planetaryBodyById, searchPlanetaryBodies } from "../planetary-catalog.mjs";
 
@@ -37,6 +38,18 @@ test("field calculator computes gradient magnitude on a regular scalar grid", ()
   ];
   const gradient = applyFieldOperation(values, [], { operation: "gradient", nx: 3, ny: 3, dx: 1, dy: 1 });
   assert.ok(Math.abs(gradient[4] - Math.sqrt(5)) < 1e-12);
+});
+
+test("adaptive mesh sections clip fine 2D and oblique 3D leaf cells exactly", () => {
+  assert.deepEqual(
+    clipSegmentToBounds([0, 0], [1, 0], [.2, .3, 0, 1], 2),
+    [.2, .3]
+  );
+  assert.deepEqual(
+    clipSegmentToBounds([0, 0], [1, 1], [.25, .5, .4, .8], 3),
+    [.4, .5]
+  );
+  assert.equal(clipSegmentToBounds([0, 0], [1, 0], [.2, .3, .4, .8], 3), null);
 });
 
 test("catalogues downloadable lithosphere models and searches their physical fields", () => {
