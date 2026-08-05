@@ -152,6 +152,7 @@ let thermalConductionResult = null;
 let rheologyResult = null;
 let statisticsResult = null;
 const TUTORIAL_PROGRESS_KEY = "gwb-visual-builder-tutorial-progress-v1";
+const WELCOME_PREFERENCE_KEY = "gwb-visual-builder-show-welcome-v1";
 const TUTORIALS = [
   {
     id: "getting-started", eyebrow: "GETTING STARTED", title: "Build your first model", shortTitle: "First model",
@@ -6409,6 +6410,7 @@ async function loadExampleCatalog() {
 
 async function loadGwbVersion() {
   const badge = document.querySelector("#gwb-version-badge");
+  const welcomeBadge = document.querySelector("#welcome-version");
   const engine = document.querySelector("#computation-engine-version");
   try {
     const response = await fetch("/api/version", { cache: "no-store" });
@@ -6416,13 +6418,34 @@ async function loadGwbVersion() {
     const metadata = await response.json();
     const version = String(metadata.version || state.settings.version);
     badge.textContent = `GWB ${version}`;
+    welcomeBadge.textContent = `GWB ${version}`;
     badge.title = `${metadata.name || "Geodynamic World Builder"} ${version} · .wb schema ${metadata.schemaVersion || state.settings.version} · WebAssembly backend available`;
+    welcomeBadge.title = badge.title;
     engine.textContent = `GWB ${version} C++ · WEBASSEMBLY WORKER`;
   } catch {
     badge.textContent = `GWB ${state.settings.version}`;
+    welcomeBadge.textContent = badge.textContent;
     badge.title = `World Builder .wb schema ${state.settings.version} · exact source version unavailable from this server`;
+    welcomeBadge.title = badge.title;
     engine.textContent = `GWB ${state.settings.version} C++ · WEBASSEMBLY WORKER`;
   }
+}
+
+function openWelcomeScreen() {
+  const screen = document.querySelector("#welcome-screen");
+  const preference = localStorage.getItem(WELCOME_PREFERENCE_KEY) !== "hidden";
+  document.querySelector("#show-welcome-on-startup").checked = preference;
+  document.querySelector("#welcome-continue").textContent = state.features.length ? `Continue current model · ${state.features.length} feature${state.features.length === 1 ? "" : "s"}` : "Continue to workspace";
+  screen.classList.remove("hidden");
+  screen.setAttribute("aria-hidden", "false");
+  requestAnimationFrame(() => document.querySelector("#welcome-new-project").focus());
+}
+
+function closeWelcomeScreen({ remember = true } = {}) {
+  const screen = document.querySelector("#welcome-screen");
+  if (remember) localStorage.setItem(WELCOME_PREFERENCE_KEY, document.querySelector("#show-welcome-on-startup").checked ? "visible" : "hidden");
+  screen.classList.add("hidden");
+  screen.setAttribute("aria-hidden", "true");
 }
 
 function selectedTomographyReferences() {
@@ -9758,8 +9781,8 @@ document.querySelectorAll("[data-output]").forEach(button => button.addEventList
   renderOutput();
 }));
 
-document.querySelector("#download-wb").addEventListener("click", () => download("world-builder-model.wb", buildWbText(), "application/json"));
-document.querySelector("#download-grid").addEventListener("click", () => download("world-builder-model.grid", buildGrid(state.settings), "text/plain"));
+document.querySelector("#download-wb").addEventListener("click", event => { download("world-builder-model.wb", buildWbText(), "application/json"); event.currentTarget.closest(".export-menu").open = false; });
+document.querySelector("#download-grid").addEventListener("click", event => { download("world-builder-model.grid", buildGrid(state.settings), "text/plain"); event.currentTarget.closest(".export-menu").open = false; });
 function syncAspectExportDialog() {
   const dimension = Number(document.querySelector("#aspect-export-dimension").value);
   document.querySelector(".aspect-export-ny-row").classList.toggle("hidden", dimension !== 3);
@@ -9770,6 +9793,7 @@ function syncAspectExportDialog() {
   document.querySelector("#aspect-export-summary").textContent = `${(nx * ny * nz).toLocaleString()} sample points · ${state.settings.compositions} composition field${Number(state.settings.compositions) === 1 ? "" : "s"} · ${state.settings.coordinateSystem} coordinates`;
 }
 document.querySelector("#open-aspect-export").addEventListener("click", () => {
+  document.querySelector("#open-aspect-export").closest(".export-menu").open = false;
   const dialog = document.querySelector("#aspect-export-dialog");
   document.querySelector("#aspect-export-dimension").value = String(Number(state.settings.dimension) === 3 ? 3 : 2);
   document.querySelector("#aspect-export-nx").value = Math.min(501, Number(state.settings.cellsX) + 1);
@@ -9843,6 +9867,7 @@ document.querySelector("#open-project-state").addEventListener("change", async e
   if (!file) return;
   try {
     restoreProjectStateDocument(JSON.parse(await readFileWithProgress(file, `Opening project ${file.name}`)));
+    closeWelcomeScreen({ remember: false });
     showToast(`${state.features.length} features restored from project state`);
   } catch (error) {
     showToast(error.message || "Could not open that project-state file");
@@ -9898,6 +9923,7 @@ document.querySelector("#import-file").addEventListener("change", async event =>
   try {
     const world = parseWorldBuilderText(await readFileWithProgress(file, `Importing ${file.name}`));
     loadWorld(world);
+    closeWelcomeScreen({ remember: false });
     showToast(`${state.features.length} features imported`);
   } catch {
     showToast("Could not read that World Builder file");
@@ -9913,6 +9939,21 @@ document.querySelector("#fit-view").addEventListener("click", () => {
 document.querySelector("#open-examples").addEventListener("click", () => {
   document.querySelector("#examples-dialog").showModal();
   document.querySelector("#example-search").focus();
+});
+document.querySelector("#open-welcome").addEventListener("click", event => { event.currentTarget.closest(".topbar-menu").open = false; openWelcomeScreen(); });
+document.querySelector("#close-welcome").addEventListener("click", () => closeWelcomeScreen());
+document.querySelector("#welcome-continue").addEventListener("click", () => closeWelcomeScreen());
+document.querySelector("#welcome-new-project").addEventListener("click", () => {
+  document.querySelector("#new-project").click();
+  closeWelcomeScreen();
+});
+document.querySelector("#welcome-examples").addEventListener("click", () => {
+  closeWelcomeScreen();
+  document.querySelector("#open-examples").click();
+});
+document.querySelector("#welcome-tutorials").addEventListener("click", () => {
+  closeWelcomeScreen();
+  document.querySelector("#open-tutorials").click();
 });
 document.querySelector("#close-examples").addEventListener("click", () => document.querySelector("#examples-dialog").close());
 document.querySelector("#open-tutorials").addEventListener("click", () => openTutorialCenter());
@@ -10125,6 +10166,9 @@ document.querySelectorAll(".toolbar-menu").forEach(menu => {
 document.querySelectorAll(".toolbar-menu-content button").forEach(button => {
   button.addEventListener("click", () => { button.closest(".toolbar-menu").open = false; });
 });
+document.querySelectorAll(".compact-menu-content button,.compact-menu-content label").forEach(item => {
+  item.addEventListener("click", () => { item.closest(".topbar-menu").open = false; });
+});
 document.querySelectorAll(".topbar-menu").forEach(menu => menu.addEventListener("toggle", () => {
   if (!menu.open) return;
   document.querySelectorAll(".toolbar-menu[open], .export-menu[open]").forEach(other => { other.open = false; });
@@ -10136,6 +10180,10 @@ document.addEventListener("pointerdown", event => {
 });
 
 window.addEventListener("keydown", event => {
+  if (!document.querySelector("#welcome-screen").classList.contains("hidden")) {
+    if (event.key === "Escape") closeWelcomeScreen();
+    return;
+  }
   if (guidedTutorial) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -10224,6 +10272,7 @@ updateCameraUI();
 updateAll();
 loadGwbVersion();
 loadExampleCatalog();
+if (localStorage.getItem(WELCOME_PREFERENCE_KEY) !== "hidden") openWelcomeScreen();
 new ResizeObserver(resize).observe(wrap);
 window.addEventListener("resize", () => {
   applyWorkspaceUI();

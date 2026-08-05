@@ -5,9 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Visual model builder for the Geodynamic World Builder">
   <title>GWB Visual Builder</title>
-  <link rel="stylesheet" href="styles.css?v=46">
+  <link rel="stylesheet" href="styles.css?v=47">
 </head>
 <body>
+  <section id="welcome-screen" class="welcome-screen hidden" aria-labelledby="welcome-title">
+    <div class="welcome-shell">
+      <header class="welcome-header">
+        <a class="welcome-brand" href="https://geodynamicworldbuilder.github.io/" target="_blank" rel="noreferrer" aria-label="Open the Geodynamic World Builder website">
+          <img src="/assets/gwb-logo.png?v=5" alt="" width="58" height="58">
+          <span><strong>Geodynamic World Builder</strong><small>Visual Builder</small></span>
+        </a>
+        <div class="welcome-header-actions"><span id="welcome-version" class="version-badge">GWB 1.2</span><span class="experimental-label">Experimental interface</span><button id="close-welcome" class="ghost" aria-label="Close welcome screen">×</button></div>
+      </header>
+      <main class="welcome-content">
+        <section class="welcome-hero">
+          <small>BUILD · EXPLORE · EXPORT</small>
+          <h1 id="welcome-title">Build geodynamic worlds visually.</h1>
+          <p>Create geological geometry, configure physical properties, inspect models in plan, 3D and section views, and export a World Builder configuration—all from one interactive workspace.</p>
+          <div class="welcome-primary-actions">
+            <button id="welcome-new-project" class="primary">Create a new model</button>
+            <button id="welcome-continue" class="ghost">Continue to workspace</button>
+          </div>
+        </section>
+        <section class="welcome-action-grid" aria-label="Start options">
+          <button id="welcome-examples" class="welcome-action-card"><span class="welcome-action-icon">▦</span><span><strong>Explore examples</strong><small>Start from tested GWB models and cookbooks.</small></span><b>→</b></button>
+          <label class="welcome-action-card" for="open-project-state"><span class="welcome-action-icon">↥</span><span><strong>Open a project</strong><small>Resume a complete editable <code>.gwbproject</code>.</small></span><b>→</b></label>
+          <label class="welcome-action-card" for="import-file"><span class="welcome-action-icon">{ }</span><span><strong>Import a .wb model</strong><small>Bring an existing World Builder file into the editor.</small></span><b>→</b></label>
+          <button id="welcome-tutorials" class="welcome-action-card"><span class="welcome-action-icon">?</span><span><strong>Follow a tutorial</strong><small>Learn features, topography, sections and workspaces.</small></span><b>→</b></button>
+        </section>
+        <section class="welcome-lower-grid">
+          <article><small>VISUAL MODEL CONSTRUCTION</small><strong>Geometry stays connected to parameters</strong><p>Draw or import features, split them into layers, then specialize temperature, density, rheology and other properties.</p></article>
+          <article><small>EXPERIMENTAL WORKFLOWS</small><strong>Explore data and physical previews</strong><p>Tomography, lithosphere, gravity, thermal, rheology and analysis modules are available for prototyping and validation.</p></article>
+          <article><small>GWB COMMUNITY</small><strong>Documentation and support</strong><p><a href="https://gwb.readthedocs.io/" target="_blank" rel="noreferrer">Manual ↗</a><a href="https://github.com/GeodynamicWorldBuilder/WorldBuilder/" target="_blank" rel="noreferrer">GitHub ↗</a><a href="https://matrix.to/#/!vhukRUGUINnZOIutoQ:matrix.org?via=matrix.org" target="_blank" rel="noreferrer">Element ↗</a></p></article>
+        </section>
+      </main>
+      <footer class="welcome-footer"><label><input id="show-welcome-on-startup" type="checkbox" checked> Show this welcome page when Visual Builder starts</label><span>Experimental interface · review assumptions and outputs before scientific use.</span></footer>
+    </div>
+  </section>
   <header class="topbar">
     <div class="brand">
       <img class="brand-logo" src="/assets/gwb-logo.png?v=5" alt="Geodynamic World Builder logo" width="42" height="42">
@@ -17,6 +51,7 @@
       <details class="topbar-menu">
         <summary>Help &amp; community</summary>
         <nav class="project-links" aria-label="GWB project links">
+          <button id="open-welcome" type="button"><strong>Welcome</strong><span>Return to the Visual Builder start page</span></button>
           <a href="https://gwb.readthedocs.io/" target="_blank" rel="noreferrer" title="Open the GWB manual"><strong>Manual</strong><span>GWB concepts and parameters ↗</span></a>
           <a href="https://github.com/GeodynamicWorldBuilder/WorldBuilder/" target="_blank" rel="noreferrer" title="Open the GWB source repository"><strong>GitHub</strong><span>Source, issues and contributions ↗</span></a>
           <a href="https://geodynamicworldbuilder.github.io/" target="_blank" rel="noreferrer" title="Learn what the Geodynamic World Builder is"><strong>About GWB</strong><span>Project overview and community ↗</span></a>
@@ -29,21 +64,29 @@
         <button id="undo-action" class="ghost" title="Previous model state (Ctrl/Cmd+Z)" aria-label="Previous model state" aria-keyshortcuts="Control+Z Meta+Z" disabled><span aria-hidden="true">←</span><span class="history-label">Previous</span></button>
         <button id="redo-action" class="ghost" title="Forward to the next model state (Ctrl/Cmd+Shift+Z)" aria-label="Forward to next model state" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled><span class="history-label">Forward</span><span aria-hidden="true">→</span></button>
       </div>
-      <button id="new-project" class="ghost">New</button>
-      <button id="open-examples" class="ghost">Examples</button>
-      <button id="open-tutorials" class="ghost" title="Learn Visual Builder with guided, interactive lessons">Tutorials</button>
-      <button id="save-project-state" class="ghost" title="Download a complete editable Visual Builder project">Save project</button>
-      <label class="button ghost" for="open-project-state" title="Reopen a saved Visual Builder project">Open project</label>
+      <details class="topbar-menu compact-project-menu">
+        <summary>Project</summary>
+        <div class="compact-menu-content">
+          <small>START &amp; LEARN</small>
+          <button id="new-project"><strong>New model</strong><span>Start with an empty World Builder domain</span></button>
+          <button id="open-examples"><strong>Examples</strong><span>Browse bundled reference models</span></button>
+          <button id="open-tutorials" title="Learn Visual Builder with guided, interactive lessons"><strong>Tutorials</strong><span>Interactive Visual Builder lessons</span></button>
+          <small>PROJECT STATE</small>
+          <button id="save-project-state" title="Download a complete editable Visual Builder project"><strong>Save project</strong><span>Download an editable .gwbproject</span></button>
+          <label for="open-project-state" title="Reopen a saved Visual Builder project"><strong>Open project</strong><span>Resume an editable .gwbproject</span></label>
+          <label for="import-file"><strong>Import .wb</strong><span>Edit an existing World Builder model</span></label>
+        </div>
+      </details>
       <input id="open-project-state" type="file" accept=".gwbproject,.json,application/json" hidden>
-      <label class="button ghost" for="import-file">Import</label>
       <input id="import-file" type="file" accept=".wb,.json" hidden>
-      <button id="download-wb" class="primary">Export .wb</button>
-      <button id="download-grid" class="ghost">Export .grid</button>
-      <button id="open-aspect-export" class="ghost" title="Export ASPECT initial temperature and composition fields">Export ASPECT</button>
-      <details class="export-menu">
-        <summary>Export geometry</summary>
+      <details class="export-menu compact-export-menu">
+        <summary>Export</summary>
         <div class="export-menu-content">
-          <small>3D / DATA FORMATS</small>
+          <small>WORLD BUILDER &amp; SOLVER</small>
+          <button id="download-wb" class="export-primary"><strong>World Builder .wb</strong><span>Model geometry and parameters</span></button>
+          <button id="download-grid"><strong>Grid configuration</strong><span>gwb-grid sampling configuration</span></button>
+          <button id="open-aspect-export"><strong>ASPECT fields</strong><span>Temperature and composition inputs</span></button>
+          <small>GEOMETRY &amp; DATA</small>
           <button data-geometry-export="vtp"><strong>VTP PolyData</strong><span>vtk.js · ParaView · attributes</span></button>
           <button data-geometry-export="vtk"><strong>Legacy VTK</strong><span>ASCII · broad compatibility</span></button>
           <button data-geometry-export="obj"><strong>Wavefront OBJ</strong><span>General 3D surface geometry</span></button>
