@@ -16,8 +16,12 @@ import { pairedStatistics, moransI, pointPatternMisfit } from "./spatial-statist
 import { convertTomographyToTemperature, ASPECT_TOMOGRAPHY_DEFAULTS } from "./tomography-temperature.mjs";
 import { buildAspectAscii, buildAspectCompositionContours } from "./aspect-ascii.mjs";
 import { DEFAULT_RHEOLOGY, computeStrengthProfile, computeBdtGrid, parseEarthquakeGeoJson, compareSeismicityToBdt } from "./rheology.mjs";
+import { advanceTutorialAction } from "./tutorial-engine.mjs";
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
+const APP_QUERY = new URLSearchParams(window.location.search);
+const TUTORIAL_PRACTICE_ID = APP_QUERY.get("tutorial");
+const IS_TUTORIAL_PRACTICE = APP_QUERY.get("practice") === "1" && Boolean(TUTORIAL_PRACTICE_ID);
 const COLOR_MAP_VERSION = 4;
 const APPEARANCE_VERSION = 3;
 const DEFAULT_APPEARANCE = {
@@ -160,10 +164,10 @@ const TUTORIALS = [
     caption: "The main workflow moves from the feature library, through the model grid, to physical properties and export.",
     summary: "Learn the complete Visual Builder workflow without changing your current project: choose a feature, place it, edit its geometry and physical parameters, inspect the model, and export a World Builder file.",
     steps: [
-      { title: "Choose a feature", copy: "The feature library contains plates, subduction zones, faults, mantle layers, and plumes. Click for automatic placement or drag onto a precise location.", target: "#feature-palette", prepare: "features" },
-      { title: "Place it on the grid", copy: "The plan view is the main geometry editor. Drag a feature, its individual vertices, thickness handle, or layer boundaries.", target: "#model-canvas", prepare: "plan" },
-      { title: "Define physical properties", copy: "The properties panel controls geometry, layers, temperature, composition, density, and feature-specific parameters.", target: ".inspector", prepare: "inspector" },
-      { title: "Export the model", copy: "Validation runs continuously. Export the generated .wb file when the geometry and parameters are ready.", target: "#download-wb", prepare: "none" }
+      { title: "Choose a feature", copy: "The feature library contains plates, subduction zones, faults, mantle layers, and plumes.", task: "Click any geological feature in the library to add it to the practice model.", target: "#feature-palette", prepare: "features", action:{event:"click",selector:".feature-card"} },
+      { title: "Move or reshape it", copy: "The plan view is the main geometry editor. Feature vertices and outlines are directly editable.", task: "Drag the feature or one of its visible vertices, then release the pointer.", target: "#model-canvas", prepare: "plan", action:{event:"pointerup",selector:"#model-canvas"} },
+      { title: "Define physical properties", copy: "The properties panel controls geometry, layers, temperature, composition, density, and feature-specific parameters.", task: "Change any numerical or selection field in the Properties panel.", target: ".inspector", prepare: "inspector", action:{event:"change",selector:".inspector input,.inspector select"} },
+      { title: "Export the model", copy: "Validation runs continuously and reports anything that must be fixed before export.", task: "Open Export and choose World Builder .wb.", target: ".compact-export-menu", prepare: "export", action:{event:"click",selector:"#download-wb"} }
     ]
   },
   {
@@ -172,10 +176,10 @@ const TUTORIALS = [
     caption: "Placement shapes create a useful starting outline; every vertex and physical parameter remains editable.",
     summary: "Build continental and oceanic plates, subduction zones, faults, mantle layers, and plumes. Learn placement shapes, vertex editing, direct resizing, internal layers, and grouped properties.",
     steps: [
-      { title: "Choose the starting shape", copy: "Select rectangular, elliptical, wedge, irregular, curved, or segmented placement before adding the feature.", target: ".placement-shape-picker", prepare: "features" },
-      { title: "Add or drag a feature", copy: "Click a feature for automatic placement or drag it from the library to the desired position.", target: ".feature-card[data-model=\"continental plate\"]", prepare: "features" },
-      { title: "Edit the outline", copy: "Select the feature and drag visible vertices. Double-click an edge to add a vertex; Delete removes the selected vertex.", target: "#model-canvas", prepare: "plan" },
-      { title: "Edit layers and physics", copy: "Use Properties for layer thicknesses, names, densities, temperatures, compositions, velocity, dip, and feature-specific models.", target: ".inspector", prepare: "inspector" }
+      { title: "Choose the starting shape", copy: "Select rectangular, elliptical, wedge, irregular, curved, or segmented placement before adding the feature.", task: "Change either the Area footprint or Line trace selection.", target: ".placement-shape-picker", prepare: "features", action:{event:"change",selector:"#area-placement-shape,#line-placement-shape"} },
+      { title: "Add a continental plate", copy: "Clicking provides automatic placement; dragging lets you choose the location.", task: "Click Continental plate in the feature library.", target: ".feature-card[data-model=\"continental plate\"]", prepare: "features", action:{event:"click",selector:".feature-card[data-model=\"continental plate\"]"} },
+      { title: "Edit the outline", copy: "Selected features expose their vertices and direct-resize controls.", task: "Drag a vertex or the feature outline and release it on the plan canvas.", target: "#model-canvas", prepare: "plan", action:{event:"pointerup",selector:"#model-canvas"} },
+      { title: "Edit layers and physics", copy: "Properties contains layer thicknesses, densities, temperatures, compositions and feature-specific models.", task: "Change one field in the Properties panel.", target: ".inspector", prepare: "inspector", action:{event:"change",selector:".inspector input,.inspector select"} }
     ]
   },
   {
@@ -184,10 +188,10 @@ const TUTORIALS = [
     caption: "Procedural terrain, brush editing, ETOPO, PaleoDEM, and isostatic surfaces share one editable elevation field.",
     summary: "Generate procedural landscapes, sculpt elevations with a brush, import geographic relief, and understand how active topography is converted to feature-compatible GWB surface models.",
     steps: [
-      { title: "Open Topography", copy: "The Topography tab groups procedural terrain, sculpting, real-data import, paleogeography, and density/isostasy controls.", target: "[data-palette-tab=\"topography\"]", prepare: "topography" },
-      { title: "Choose a brush", copy: "Elevate, depress, or smooth terrain directly on the plan view. Select area applies the current strength to a bounded region.", target: ".terrain-tool-grid", prepare: "topography" },
-      { title: "Set radius and strength", copy: "Brush radius controls the affected area; strength controls the elevation change per pass.", target: "#terrain-brush", prepare: "topography" },
-      { title: "Paint on the model", copy: "Press and drag over the model grid. The elevation scale and 3D surface update with the active topography.", target: "#model-canvas", prepare: "plan" }
+      { title: "Open Topography", copy: "The Topography tab groups procedural terrain, sculpting, real-data import, paleogeography, and density/isostasy controls.", task: "Click the Topography tab.", target: "[data-palette-tab=\"topography\"]", prepare: "palette", action:{event:"click",selector:"[data-palette-tab=\"topography\"]"} },
+      { title: "Generate a starting surface", copy: "Procedural presets create an editable numerical elevation field.", task: "Choose a preset if desired, then click Generate terrain.", target: "#generate-terrain", prepare: "topography", action:{event:"click",selector:"#generate-terrain"} },
+      { title: "Choose and size a brush", copy: "Elevate, depress, or smooth terrain directly on the plan view.", task: "Select a sculpting tool or change the brush radius.", target: ".terrain-tool-grid", prepare: "topography", action:{event:"click",selector:".terrain-tool-grid button"} },
+      { title: "Paint on the model", copy: "The elevation scale and 3D surface update with the active topography.", task: "Press and drag over the model grid, then release the pointer.", target: "#model-canvas", prepare: "plan", action:{event:"pointerup",selector:"#model-canvas"} }
     ]
   },
   {
@@ -196,10 +200,10 @@ const TUTORIALS = [
     caption: "Choose reconstruction age and vector families before converting visible continents, boundaries, and subduction zones into GWB features.",
     summary: "Load an EarthByte/GPlates reconstruction, choose an age and anchor plate, control visible feature families, convert them to editable GWB geometry, and review subduction polarity.",
     steps: [
-      { title: "Open the reconstruction tools", copy: "GPlates and EarthByte controls are located in the Topography tab under Paleogeography.", target: ".paleogeography-source", prepare: "gplates" },
-      { title: "Choose model and age", copy: "Select a plate reconstruction model, geological age, and anchor plate appropriate for the scientific problem.", target: "#paleo-model", prepare: "gplates" },
-      { title: "Select feature families", copy: "Continents, subduction zones, and plate boundaries can be loaded and toggled independently.", target: ".paleo-layer-grid", prepare: "gplates" },
-      { title: "Convert visible vectors", copy: "Convert the currently visible vectors into grouped, editable Visual Builder features, then inspect their individual properties.", target: "#convert-paleo-features", prepare: "gplates" }
+      { title: "Open the reconstruction tools", copy: "GPlates and EarthByte controls are located under Topography → Paleogeography.", task: "Click the Topography tab.", target: "[data-palette-tab=\"topography\"]", prepare: "palette", action:{event:"click",selector:"[data-palette-tab=\"topography\"]"} },
+      { title: "Choose model and age", copy: "Select a plate reconstruction model, geological age, and anchor plate appropriate for the scientific problem.", task: "Change the reconstruction model or geological age.", target: "#paleo-model", prepare: "gplates", action:{event:"change",selector:"#paleo-model,#paleo-age"} },
+      { title: "Select feature families", copy: "Continents, subduction zones, and plate boundaries can be loaded and toggled independently.", task: "Toggle at least one reconstruction layer.", target: ".paleo-layer-grid", prepare: "gplates", action:{event:"change",selector:".paleo-layer-grid input"} },
+      { title: "Convert visible vectors", copy: "Loaded vectors become grouped, editable Visual Builder features.", task: "Click Convert visible vectors. Skip this step if no reconstruction data is loaded.", target: "#convert-paleo-features", prepare: "gplates", action:{event:"click",selector:"#convert-paleo-features"} }
     ]
   },
   {
@@ -208,10 +212,11 @@ const TUTORIALS = [
     caption: "Numerical dVs or dVp depth slices can guide geometry and supply an editable iso-boundary.",
     summary: "Browse tomography models, load a numerical depth slice, change the displayed scalar and colour range, inspect anomalies, and convert a selected iso-region into editable feature geometry.",
     steps: [
-      { title: "Open Tomography", copy: "Tomography is available from the Data menu and opens as a movable explorer over the model.", target: "#tomography-editor", prepare: "tomography" },
-      { title: "Choose a model and depth", copy: "Select the model, depth, geographic bounds, and sampling resolution for the numerical slice.", target: "#tomography-model", prepare: "tomography" },
-      { title: "Choose dVs or dVp", copy: "Switch the scalar field, conversion ratio, colour range, iso-value, and anomaly direction.", target: "#tomography-scalar-field", prepare: "tomography" },
-      { title: "Create editable geometry", copy: "The largest selected iso-region can be converted into a normal Visual Builder feature and refined manually.", target: "#tomography-create-feature", prepare: "tomography" }
+      { title: "Open Tomography", copy: "Tomography is an experimental data workspace that opens as a movable explorer.", task: "Open Workspaces and click Tomography.", target: "#toggle-tomography", prepare: "workspaces", action:{event:"click",selector:"#toggle-tomography"} },
+      { title: "Choose a model and depth", copy: "Select the model, depth, geographic bounds, and sampling resolution for the numerical slice.", task: "Change the tomography model or depth.", target: "#tomography-model", prepare: "tomography", action:{event:"change",selector:"#tomography-model,#tomography-depth"} },
+      { title: "Load a numerical slice", copy: "Numerical grids can be sampled, recoloured and exported.", task: "Click Load numerical depth grid. Skip if the coefficient data are unavailable locally.", target: "#load-tomography", prepare: "tomography", action:{event:"click",selector:"#load-tomography"} },
+      { title: "Choose dVs or dVp", copy: "Switch the scalar field, conversion ratio, colour range, iso-value, and anomaly direction.", task: "Change the displayed scalar or iso-value.", target: "#tomography-scalar-field", prepare: "tomography", action:{event:"change",selector:"#tomography-scalar-field,#tomography-iso-value"} },
+      { title: "Create editable geometry", copy: "The largest selected iso-region can become a normal Visual Builder feature.", task: "Click Create editable feature. Skip if no numerical slice was loaded.", target: "#tomography-create-feature", prepare: "tomography", action:{event:"click",selector:"#tomography-create-feature"} }
     ]
   },
   {
@@ -220,10 +225,10 @@ const TUTORIALS = [
     caption: "A curved plan-view path drives the depth section while 3D and section views remain available in a split layout.",
     summary: "Trace a straight or curved section, edit or delete its control points, inspect current topography and internal layers with depth, and compare plan, section, and 3D views.",
     steps: [
-      { title: "Start a section path", copy: "Choose Draw section, then click two or more plan-view points. Additional points create a curved section.", target: "[data-tool=\"section\"]", prepare: "plan" },
-      { title: "Edit the path", copy: "Choose Edit section, drag its control points, click to add bends, remove selected points, or delete the complete path.", target: "#section-actions", prepare: "section" },
-      { title: "Open the depth section", copy: "Depth section shows feature layers, non-uniform contours, temperature, and the current topographic surface along the path.", target: "[data-view=\"section\"]", prepare: "none" },
-      { title: "Compare synchronized views", copy: "Split the screen to keep plan, 3D, or depth views side by side and optionally link their cameras.", target: "#toggle-split-view", prepare: "none" }
+      { title: "Start a section path", copy: "A section may be straight or follow a multi-point curved trace.", task: "Click Draw section.", target: "[data-tool=\"section\"]", prepare: "plan", action:{event:"click",selector:"[data-tool=\"section\"]"} },
+      { title: "Draw the path", copy: "Additional points create bends in the section plane.", task: "Click at least two locations on the plan canvas.", target: "#model-canvas", prepare: "section", action:{event:"pointerup",selector:"#model-canvas",count:2} },
+      { title: "Open the depth section", copy: "Depth section shows layers, non-uniform contours, temperature and current topography.", task: "Click Depth section.", target: "[data-view=\"section\"]", prepare: "none", action:{event:"click",selector:"[data-view=\"section\"]"} },
+      { title: "Compare synchronized views", copy: "Split the screen to keep plan, 3D, or depth views side by side.", task: "Click Split view.", target: "#toggle-split-view", prepare: "none", action:{event:"click",selector:"#toggle-split-view"} }
     ]
   },
   {
@@ -232,10 +237,61 @@ const TUTORIALS = [
     caption: "Map, 3D, and section panes compare predicted fields with the editable geological model.",
     summary: "Configure the gravity preview, choose free-air, Bouguer, residual, or tensor components, compare map and section profiles, edit contours, and recompute the signal.",
     steps: [
-      { title: "Open Gravity", copy: "Gravity is available from the Data menu and opens a movable configuration panel.", target: "#gravity-editor", prepare: "gravity" },
-      { title: "Choose the displayed field", copy: "Select free-air, Bouguer, residual gravity, or one of the gravity-gradient tensor components.", target: "#gravity-field", prepare: "gravity" },
-      { title: "Compute and open the workspace", copy: "Enable the overlay, compute the preview, then open the dedicated map, 3D, and section workspace.", target: "#open-gravity-workspace", prepare: "gravity" },
-      { title: "Interpret and edit", copy: "Draw a profile, switch to contours-only, drag feature vertices, and compare the recalculated anomaly with the section structure.", target: "#open-gravity-workspace", prepare: "gravity" }
+      { title: "Open Gravity", copy: "Gravity is an experimental physics workspace with a movable configuration panel.", task: "Open Workspaces and click Gravity.", target: "#toggle-gravity", prepare: "workspaces", action:{event:"click",selector:"#toggle-gravity"} },
+      { title: "Choose the displayed field", copy: "Select free-air, Bouguer, residual gravity, or a gravity-gradient tensor component.", task: "Change the gravity field.", target: "#gravity-field", prepare: "gravity", action:{event:"change",selector:"#gravity-field"} },
+      { title: "Enable and compute", copy: "The gravity signal is derived from the current density volumes and topography.", task: "Enable the gravity overlay.", target: "#gravity-enabled", prepare: "gravity", action:{event:"change",selector:"#gravity-enabled"} },
+      { title: "Open the results workspace", copy: "Map, 3D and section panes provide linked interpretations.", task: "Click Open gravity results workspace.", target: "#open-gravity-workspace", prepare: "gravity", action:{event:"click",selector:"#open-gravity-workspace"} },
+      { title: "Interpret contours", copy: "Contours-only keeps feature boundaries visible without geological fills.", task: "Click Contours only in the gravity workspace.", target: "#toggle-gravity-feature-contours", prepare: "none", action:{event:"click",selector:"#toggle-gravity-feature-contours"} }
+    ]
+  },
+  {
+    id:"layers-materials",eyebrow:"LAYERED MODELS",title:"Build layers with inherited material properties",shortTitle:"Layers & materials",
+    icon:"▤",duration:"7 min",image:"/assets/tutorials/features-and-properties.jpg",
+    caption:"Feature defaults flow into sublayers until a layer receives an explicit thermal or rheological override.",
+    summary:"Create a layered lithosphere, edit layer thickness and composition, and learn the workspace → feature → sublayer inheritance workflow for thermal and rheological properties.",
+    steps:[
+      {title:"Add a continental plate",copy:"Named layer presets are available for continental and oceanic plates.",task:"Click Continental plate in the feature library.",target:".feature-card[data-model=\"continental plate\"]",prepare:"features",action:{event:"click",selector:".feature-card[data-model=\"continental plate\"]"}},
+      {title:"Apply the lithosphere preset",copy:"The continental preset creates upper crust, lower crust and mantle lithosphere intervals.",task:"Click Apply continental lithosphere preset in Properties.",target:"#apply-layer-preset",prepare:"inspector",action:{event:"click",selector:"#apply-layer-preset"}},
+      {title:"Edit a sublayer",copy:"Depth, temperature, composition and density remain independently editable.",task:"Change a density, temperature or depth field inside one layer.",target:".layer-list",prepare:"inspector",action:{event:"change",selector:"[data-layer-key]"}},
+      {title:"Override an analysis property",copy:"Blank analysis fields inherit from the feature; entered values apply only to that sublayer.",task:"Expand Analysis overrides and change one thermal or rheological property.",target:".layer-material",prepare:"inspector",action:{event:"change",selector:"[data-layer-material-key]"}}
+    ]
+  },
+  {
+    id:"thermal",eyebrow:"THERMAL MODELLING",title:"Solve a conductive thermal model",shortTitle:"Thermal conduction",
+    icon:"♨",duration:"8 min",image:"/assets/tutorials/workspace-overview.jpg",
+    caption:"Boundary conditions and layer-dependent material properties feed a steady or transient conductive temperature preview.",
+    summary:"Configure boundary temperatures or heat flux, use feature and sublayer material properties, solve conduction, and inspect the resulting map, section and geotherm.",
+    steps:[
+      {title:"Add a geological body",copy:"The solver can use feature-dependent conductivity, heat production, density and heat capacity.",task:"Add any area feature to the practice model.",target:"#feature-palette",prepare:"features",action:{event:"click",selector:".feature-card"}},
+      {title:"Open Thermal conduction",copy:"Physics workflows are grouped in the experimental Workspaces launcher.",task:"Open Workspaces and click Thermal conduction.",target:"#toggle-thermal-conduction",prepare:"workspaces",action:{event:"click",selector:"#toggle-thermal-conduction"}},
+      {title:"Choose the solution",copy:"Steady state and transient conduction share the same spatial material field.",task:"Change the solution mode or a thermal boundary value.",target:"#thermal-mode",prepare:"thermal",action:{event:"change",selector:"#thermal-mode,#thermal-top-temperature,#thermal-bottom-temperature"}},
+      {title:"Solve conduction",copy:"The browser solver reports progress and preserves the result for visualisation.",task:"Click Solve conduction.",target:"#solve-thermal-preview",prepare:"thermal",action:{event:"click",selector:"#solve-thermal-preview"}},
+      {title:"Inspect the result",copy:"The dedicated workspace combines a map, section and geotherm.",task:"Click Open workspace.",target:"#open-thermal-workspace",prepare:"thermal",action:{event:"click",selector:"#open-thermal-workspace"}}
+    ]
+  },
+  {
+    id:"rheology",eyebrow:"STRENGTH MODELLING",title:"Compute strength and the brittle–ductile transition",shortTitle:"Rheology",
+    icon:"ϵ̇",duration:"9 min",image:"/assets/tutorials/sections-3d.jpg",
+    caption:"Depth-dependent temperature, density, plastic yield and viscous creep determine the governing strength and BDT.",
+    summary:"Create a layered column, prescribe creep and plastic properties, compute a strength envelope, and compare the predicted plastic domain with optional seismicity.",
+    steps:[
+      {title:"Create a layered plate",copy:"Rheology can vary between feature layers and sublayers.",task:"Add a continental plate.",target:".feature-card[data-model=\"continental plate\"]",prepare:"features",action:{event:"click",selector:".feature-card[data-model=\"continental plate\"]"}},
+      {title:"Split the lithosphere",copy:"Named layers make depth-dependent rheological overrides easier to manage.",task:"Apply the continental lithosphere preset.",target:"#apply-layer-preset",prepare:"inspector",action:{event:"click",selector:"#apply-layer-preset"}},
+      {title:"Open Rheology & seismicity",copy:"The workspace shows BDT maps, sections and strength envelopes.",task:"Open Workspaces and click Rheology & seismicity.",target:"#toggle-rheology",prepare:"workspaces",action:{event:"click",selector:"#toggle-rheology"}},
+      {title:"Set a deformation rate",copy:"Dislocation-creep strength responds to strain rate, temperature, pressure and flow-law parameters.",task:"Change the prescribed strain rate.",target:"#rheology-strain-rate",prepare:"none",action:{event:"change",selector:"#rheology-strain-rate"}},
+      {title:"Recompute strength",copy:"The BDT and strength envelope update from the current layered material model.",task:"Click Compute.",target:"#compute-rheology",prepare:"none",action:{event:"click",selector:"#compute-rheology"}}
+    ]
+  },
+  {
+    id:"export",eyebrow:"OUTPUT & REPRODUCIBILITY",title:"Validate, save, and export a model",shortTitle:"Save & export",
+    icon:"⇩",duration:"5 min",image:"/assets/tutorials/workspace-overview.jpg",
+    caption:"Editable project state is separate from scientific World Builder, grid, solver and geometry outputs.",
+    summary:"Understand the difference between a .gwbproject and .wb file, review generated output, and choose grid, ASPECT, VTK, GIS or tabular exports.",
+    steps:[
+      {title:"Add model geometry",copy:"Scientific exports require at least one feature.",task:"Add any feature to the practice model.",target:"#feature-palette",prepare:"features",action:{event:"click",selector:".feature-card"}},
+      {title:"Inspect generated files",copy:"The Generated files tab previews World Builder and grid content before download.",task:"Click Generated files in the right inspector.",target:"[data-tab=\"output\"]",prepare:"inspector",action:{event:"click",selector:"[data-tab=\"output\"]"}},
+      {title:"Open the Export menu",copy:"All scientific outputs are grouped by purpose in a compact menu.",task:"Click Export.",target:".compact-export-menu>summary",prepare:"none",action:{event:"click",selector:".compact-export-menu>summary"}},
+      {title:"Export World Builder",copy:"The .wb file contains supported GWB geometry and physical parameters.",task:"Choose World Builder .wb.",target:"#download-wb",prepare:"export",action:{event:"click",selector:"#download-wb"}}
     ]
   }
 ];
@@ -286,6 +342,8 @@ let researchTimer = null;
 let activeTutorialId = TUTORIALS[0].id;
 let guidedTutorial = null;
 let guidedTutorialStep = 0;
+let guidedStepComplete = false;
+let guidedStepActionCount = 0;
 let activitySequence = 0;
 let activityHideTimer = null;
 let activeViewport = "primary";
@@ -316,7 +374,7 @@ let lastHistorySignature = "";
 
 function loadState() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const saved = IS_TUTORIAL_PRACTICE ? null : JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (saved?.settings && Array.isArray(saved.features)) {
       saved.settings = { ...DEFAULT_SETTINGS, ...saved.settings };
       saved.settings.coordinateSystem = saved.settings.gridType === "chunk" ? "spherical" : "cartesian";
@@ -395,6 +453,10 @@ function featureSublayerVisible(feature, index) {
 }
 
 function persist() {
+  if (IS_TUTORIAL_PRACTICE) {
+    document.querySelector("#save-state").textContent = "Practice model · not saved";
+    return;
+  }
   try {
     const persistentState = {
       ...state,
@@ -6237,11 +6299,9 @@ function renderTutorialDetail() {
   image.alt = `${tutorial.title} tutorial preview`;
   document.querySelector("#tutorial-image-caption").textContent = tutorial.caption;
   document.querySelector("#tutorial-step-list").innerHTML = tutorial.steps.map(step => `
-    <li><div><strong>${escapeHtml(step.title)}</strong><span>${escapeHtml(step.copy)}</span></div></li>`).join("");
-  const complete = Boolean(progress[tutorial.id]?.complete);
-  const completeButton = document.querySelector("#mark-tutorial-complete");
-  completeButton.textContent = complete ? "Completed ✓" : "Mark as complete";
-  completeButton.classList.toggle("active", complete);
+    <li><div><strong>${escapeHtml(step.title)}</strong><span>${escapeHtml(step.copy)}</span><em>${escapeHtml(step.task || "Interactive checkpoint")}</em></div></li>`).join("");
+  const saved = progress[tutorial.id];
+  document.querySelector("#start-guided-tutorial").textContent = saved?.complete ? "Practice again in a new window" : "Open interactive practice window";
 }
 
 function renderTutorialTopics(query = document.querySelector("#tutorial-search")?.value || "") {
@@ -6254,8 +6314,8 @@ function renderTutorialTopics(query = document.querySelector("#tutorial-search")
   list.innerHTML = filtered.map(tutorial => `
     <button type="button" class="tutorial-topic ${tutorial.id === activeTutorialId ? "active" : ""}" data-tutorial-id="${tutorial.id}">
       <span class="tutorial-topic-icon" aria-hidden="true">${tutorial.icon}</span>
-      <span class="tutorial-topic-copy"><strong>${escapeHtml(tutorial.shortTitle)}</strong><small>${tutorial.duration} · ${tutorial.steps.length} steps</small></span>
-      <span class="tutorial-topic-status" aria-label="${progress[tutorial.id]?.complete ? "Completed" : "Not completed"}">${progress[tutorial.id]?.complete ? "✓" : ""}</span>
+      <span class="tutorial-topic-copy"><strong>${escapeHtml(tutorial.shortTitle)}</strong><small>${tutorial.duration} · ${tutorial.steps.length} tasks${progress[tutorial.id]?.skippedSteps ? ` · ${progress[tutorial.id].skippedSteps} skipped` : ""}</small></span>
+      <span class="tutorial-topic-status" aria-label="${progress[tutorial.id]?.complete ? "Completed" : "Not completed"}">${progress[tutorial.id]?.complete ? "✓" : progress[tutorial.id]?.lastStep != null ? "•" : ""}</span>
     </button>`).join("");
   if (!filtered.length) {
     list.innerHTML = `<p class="navigator-empty">No tutorial matches “${escapeHtml(query)}”.</p>`;
@@ -6292,6 +6352,11 @@ function revealTutorialEditor(id, toggleId) {
 }
 
 function prepareGuidedTutorialStep(step) {
+  if (step.prepare === "palette") {
+    state.ui.paletteCollapsed = false;
+    state.ui.compactPanel = "palette";
+    applyWorkspaceUI();
+  }
   if (step.prepare === "features") selectTutorialPaletteTab("features");
   if (step.prepare === "topography" || step.prepare === "gplates") selectTutorialPaletteTab("topography");
   if (step.prepare === "gplates") {
@@ -6301,6 +6366,13 @@ function prepareGuidedTutorialStep(step) {
   }
   if (step.prepare === "tomography") revealTutorialEditor("#tomography-editor", "#toggle-tomography");
   if (step.prepare === "gravity") revealTutorialEditor("#gravity-editor", "#toggle-gravity");
+  if (step.prepare === "thermal") revealTutorialEditor("#thermal-conduction-editor", "#toggle-thermal-conduction");
+  if (step.prepare === "workspaces") {
+    closeFloatingEditors();
+    document.querySelector("#workspace-launcher").open = true;
+    filterWorkspaceLauncher();
+  }
+  if (step.prepare === "export") document.querySelector(".compact-export-menu").open = true;
   if (step.prepare === "plan") {
     const planButton = document.querySelector('[data-view="plan"]');
     if (planButton && !planButton.classList.contains("active")) planButton.click();
@@ -6321,6 +6393,10 @@ function positionGuidedTutorial() {
   const step = guidedTutorial.steps[guidedTutorialStep];
   const target = document.querySelector(step.target) || document.querySelector(".stage");
   if (!target) return;
+  const tour = document.querySelector("#guided-tour");
+  const targetDialog = target.closest("dialog[open]");
+  if (targetDialog && tour.parentElement !== targetDialog) targetDialog.appendChild(tour);
+  if (!targetDialog && tour.parentElement !== document.body) document.body.appendChild(tour);
   target.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
   const rect = target.getBoundingClientRect();
   const pad = 7;
@@ -6356,19 +6432,84 @@ function positionGuidedTutorial() {
 function renderGuidedTutorialStep() {
   if (!guidedTutorial) return;
   const step = guidedTutorial.steps[guidedTutorialStep];
+  guidedStepComplete = !step.action;
+  guidedStepActionCount = 0;
   prepareGuidedTutorialStep(step);
   document.querySelector("#guided-tour-progress").textContent =
     `${guidedTutorial.shortTitle} · step ${guidedTutorialStep + 1} of ${guidedTutorial.steps.length}`;
   document.querySelector("#guided-tour-title").textContent = step.title;
   document.querySelector("#guided-tour-copy").textContent = step.copy;
+  document.querySelector("#guided-tour-task").textContent = step.task || "Review this information, then continue.";
   document.querySelector("#guided-tour-previous").disabled = guidedTutorialStep === 0;
   document.querySelector("#guided-tour-next").textContent =
-    guidedTutorialStep === guidedTutorial.steps.length - 1 ? "Finish" : "Next";
+    guidedTutorialStep === guidedTutorial.steps.length - 1 ? "Finish" : "Continue";
+  updateGuidedTutorialGate();
   requestAnimationFrame(() => requestAnimationFrame(positionGuidedTutorial));
 }
 
+function updateGuidedTutorialGate() {
+  const next = document.querySelector("#guided-tour-next");
+  const status = document.querySelector("#guided-tour-status");
+  next.disabled = !guidedStepComplete;
+  status.classList.toggle("complete", guidedStepComplete);
+  status.classList.toggle("waiting", !guidedStepComplete);
+  status.lastChild.textContent = guidedStepComplete ? " Action completed · Continue is unlocked" : " Waiting for your action";
+}
+
+function recordTutorialStep(result) {
+  if (!guidedTutorial) return;
+  const progress = tutorialProgress();
+  const current = progress[guidedTutorial.id] || {};
+  const stepResults = { ...(current.stepResults || {}), [guidedTutorialStep]: result };
+  progress[guidedTutorial.id] = {
+    ...current, lastStep:guidedTutorialStep, stepResults,
+    skippedSteps:Object.values(stepResults).filter(value => value === "skipped").length,
+    updatedAt:new Date().toISOString()
+  };
+  saveTutorialProgress(progress);
+}
+
+function completeGuidedTutorialAction() {
+  if (!guidedTutorial || guidedStepComplete) return;
+  guidedStepComplete = true;
+  recordTutorialStep("completed");
+  updateGuidedTutorialGate();
+  showToast("Tutorial action completed");
+}
+
+function handleGuidedTutorialAction(event) {
+  if (!guidedTutorial || guidedStepComplete) return;
+  const action = guidedTutorial.steps[guidedTutorialStep].action;
+  const result = advanceTutorialAction(action,event.type,Boolean(event.target?.closest?.(action?.selector)),guidedStepActionCount);
+  if (!result.matched) return;
+  guidedStepActionCount = result.count;
+  if (result.complete) completeGuidedTutorialAction();
+  else {
+    const remaining = Number(action.count || 1) - guidedStepActionCount;
+    document.querySelector("#guided-tour-status").lastChild.textContent = ` ${remaining} more action${remaining === 1 ? "" : "s"} required`;
+  }
+}
+
+function advanceGuidedTutorial() {
+  if (!guidedTutorial || !guidedStepComplete) return;
+  if (guidedTutorialStep >= guidedTutorial.steps.length - 1) {
+    closeGuidedTutorial({ complete:true, reopen:!IS_TUTORIAL_PRACTICE });
+    showToast(`${activeTutorial().shortTitle} tutorial completed`);
+    return;
+  }
+  guidedTutorialStep += 1;
+  renderGuidedTutorialStep();
+}
+
+function skipGuidedTutorialStep() {
+  if (!guidedTutorial) return;
+  recordTutorialStep("skipped");
+  guidedStepComplete = true;
+  advanceGuidedTutorial();
+}
+
 function startGuidedTutorial(tutorial = activeTutorial()) {
-  document.querySelector("#tutorial-dialog").close();
+  if (document.querySelector("#tutorial-dialog").open) document.querySelector("#tutorial-dialog").close();
   guidedTutorial = tutorial;
   guidedTutorialStep = 0;
   const tour = document.querySelector("#guided-tour");
@@ -6378,22 +6519,35 @@ function startGuidedTutorial(tutorial = activeTutorial()) {
   renderGuidedTutorialStep();
 }
 
+function openTutorialPractice(tutorial = activeTutorial()) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("tutorial",tutorial.id);
+  url.searchParams.set("practice","1");
+  const practiceWindow = window.open(url.toString(),`gwb-tutorial-${tutorial.id}`);
+  if (!practiceWindow) showToast("The practice window was blocked · allow pop-ups and try again");
+  else document.querySelector("#tutorial-dialog").close();
+}
+
 function closeGuidedTutorial({ complete = false, reopen = false } = {}) {
   if (!guidedTutorial) return;
   const completedTutorial = guidedTutorial;
   if (complete) {
     const progress = tutorialProgress();
-    progress[completedTutorial.id] = { complete: true, completedAt: new Date().toISOString() };
+    const current = progress[completedTutorial.id] || {};
+    progress[completedTutorial.id] = { ...current, complete: true, completedAt: new Date().toISOString() };
     saveTutorialProgress(progress);
   }
   if (tool === "section") cancelSectionPath();
   guidedTutorial = null;
   guidedTutorialStep = 0;
+  guidedStepComplete = false;
+  guidedStepActionCount = 0;
   const tour = document.querySelector("#guided-tour");
   tour.classList.add("hidden");
   tour.setAttribute("aria-hidden", "true");
+  if (tour.parentElement !== document.body) document.body.appendChild(tour);
   document.body.classList.remove("tutorial-active");
-  if (reopen) openTutorialCenter(completedTutorial.id);
+  if (reopen && !IS_TUTORIAL_PRACTICE) openTutorialCenter(completedTutorial.id);
 }
 
 async function loadExampleCatalog() {
@@ -9959,38 +10113,26 @@ document.querySelector("#close-examples").addEventListener("click", () => docume
 document.querySelector("#open-tutorials").addEventListener("click", () => openTutorialCenter());
 document.querySelector("#close-tutorials").addEventListener("click", () => document.querySelector("#tutorial-dialog").close());
 document.querySelector("#tutorial-search").addEventListener("input", event => renderTutorialTopics(event.target.value));
-document.querySelector("#start-guided-tutorial").addEventListener("click", () => startGuidedTutorial());
-document.querySelector("#mark-tutorial-complete").addEventListener("click", () => {
-  const tutorial = activeTutorial();
-  const progress = tutorialProgress();
-  if (progress[tutorial.id]?.complete) delete progress[tutorial.id];
-  else progress[tutorial.id] = { complete: true, completedAt: new Date().toISOString() };
-  saveTutorialProgress(progress);
-  renderTutorialTopics();
-  renderTutorialDetail();
-});
+document.querySelector("#start-guided-tutorial").addEventListener("click", () => openTutorialPractice());
 document.querySelector("#reset-tutorial-progress").addEventListener("click", () => {
   saveTutorialProgress({});
   renderTutorialTopics();
   renderTutorialDetail();
   showToast("Tutorial progress reset");
 });
-document.querySelector("#close-guided-tour").addEventListener("click", () => closeGuidedTutorial({ reopen: true }));
-document.querySelector("#guided-tour-shade").addEventListener("click", () => closeGuidedTutorial({ reopen: true }));
+document.querySelector("#close-guided-tour").addEventListener("click", () => closeGuidedTutorial({ reopen: !IS_TUTORIAL_PRACTICE }));
 document.querySelector("#guided-tour-previous").addEventListener("click", () => {
   if (!guidedTutorial || guidedTutorialStep <= 0) return;
   guidedTutorialStep -= 1;
   renderGuidedTutorialStep();
 });
-document.querySelector("#guided-tour-next").addEventListener("click", () => {
-  if (!guidedTutorial) return;
-  if (guidedTutorialStep >= guidedTutorial.steps.length - 1) {
-    closeGuidedTutorial({ complete: true, reopen: true });
-    showToast(`${activeTutorial().shortTitle} tutorial completed`);
-    return;
-  }
-  guidedTutorialStep += 1;
-  renderGuidedTutorialStep();
+document.querySelector("#guided-tour-skip").addEventListener("click", skipGuidedTutorialStep);
+document.querySelector("#guided-tour-next").addEventListener("click", advanceGuidedTutorial);
+["click","input","change","pointerup"].forEach(type => document.addEventListener(type,handleGuidedTutorialAction));
+document.querySelector("#exit-tutorial-practice").addEventListener("click", () => {
+  if (guidedTutorial) closeGuidedTutorial();
+  window.close();
+  setTimeout(() => { if (!window.closed) window.location.href = window.location.pathname; },100);
 });
 document.querySelector("#example-search").addEventListener("input", event => { exampleQuery = event.target.value; renderExamples(); });
 document.querySelector("#example-category").addEventListener("change", event => { exampleCategory = event.target.value; renderExamples(); });
@@ -10187,7 +10329,7 @@ window.addEventListener("keydown", event => {
   if (guidedTutorial) {
     if (event.key === "Escape") {
       event.preventDefault();
-      closeGuidedTutorial({ reopen: true });
+      closeGuidedTutorial({ reopen: !IS_TUTORIAL_PRACTICE });
     }
     return;
   }
@@ -10272,7 +10414,15 @@ updateCameraUI();
 updateAll();
 loadGwbVersion();
 loadExampleCatalog();
-if (localStorage.getItem(WELCOME_PREFERENCE_KEY) !== "hidden") openWelcomeScreen();
+if (!IS_TUTORIAL_PRACTICE && localStorage.getItem(WELCOME_PREFERENCE_KEY) !== "hidden") openWelcomeScreen();
+if (IS_TUTORIAL_PRACTICE) {
+  const tutorial = TUTORIALS.find(item => item.id === TUTORIAL_PRACTICE_ID) || TUTORIALS[0];
+  activeTutorialId = tutorial.id;
+  document.querySelector("#tutorial-practice-banner").classList.remove("hidden");
+  document.querySelector("#save-state").textContent = "Practice model · not saved";
+  document.title = `${tutorial.shortTitle} practice · GWB Visual Builder`;
+  requestAnimationFrame(() => startGuidedTutorial(tutorial));
+}
 new ResizeObserver(resize).observe(wrap);
 window.addEventListener("resize", () => {
   applyWorkspaceUI();

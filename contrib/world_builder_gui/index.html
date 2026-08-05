@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Visual model builder for the Geodynamic World Builder">
   <title>GWB Visual Builder</title>
-  <link rel="stylesheet" href="styles.css?v=47">
+  <link rel="stylesheet" href="styles.css?v=48">
 </head>
 <body>
   <section id="welcome-screen" class="welcome-screen hidden" aria-labelledby="welcome-title">
@@ -102,6 +102,10 @@
       <strong id="activity-progress-percent"></strong>
     </div>
     <div class="activity-progress-track" aria-hidden="true"><i id="activity-progress-fill"></i></div>
+  </div>
+  <div id="tutorial-practice-banner" class="tutorial-practice-banner hidden" role="status">
+    <span><strong>Interactive tutorial practice</strong> · changes in this window are temporary and do not overwrite your saved model.</span>
+    <button id="exit-tutorial-practice" class="ghost">Close practice</button>
   </div>
 
   <main class="workspace">
@@ -1381,8 +1385,8 @@
         </figure>
         <ol id="tutorial-step-list" class="tutorial-step-list"></ol>
         <div class="tutorial-detail-actions">
-          <button id="start-guided-tutorial" class="primary">Start guided tutorial</button>
-          <button id="mark-tutorial-complete" class="ghost">Mark as complete</button>
+          <button id="start-guided-tutorial" class="primary">Open interactive practice window</button>
+          <span>Each step waits for the requested action. You may explicitly skip a step when data or a backend is unavailable.</span>
         </div>
       </section>
     </div>
@@ -1391,21 +1395,24 @@
   <div id="guided-tour" class="guided-tour hidden" aria-hidden="true">
     <div id="guided-tour-shade" class="guided-tour-shade"></div>
     <div id="guided-tour-focus" class="guided-tour-focus" aria-hidden="true"></div>
-    <section id="guided-tour-card" class="guided-tour-card" role="dialog" aria-modal="true" aria-labelledby="guided-tour-title">
+    <section id="guided-tour-card" class="guided-tour-card" role="dialog" aria-modal="false" aria-labelledby="guided-tour-title">
       <div class="guided-tour-card-heading">
         <span id="guided-tour-progress">Step 1 of 4</span>
         <button id="close-guided-tour" class="ghost" aria-label="Exit guided tutorial">×</button>
       </div>
       <h3 id="guided-tour-title">Choose a feature</h3>
       <p id="guided-tour-copy"></p>
+      <div class="guided-tour-task"><small>YOUR TASK</small><strong id="guided-tour-task"></strong></div>
+      <div id="guided-tour-status" class="guided-tour-status waiting" role="status" aria-live="polite"><span></span>Waiting for your action</div>
       <div class="guided-tour-actions">
         <button id="guided-tour-previous" class="ghost">Previous</button>
-        <button id="guided-tour-next" class="primary">Next</button>
+        <button id="guided-tour-skip" class="ghost">Skip step</button>
+        <button id="guided-tour-next" class="primary" disabled>Continue</button>
       </div>
     </section>
   </div>
 
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="app.js?v=86"></script>
+  <script type="module" src="app.js?v=87"></script>
 </body>
 </html>

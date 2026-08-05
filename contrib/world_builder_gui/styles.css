@@ -65,6 +65,7 @@ body[data-theme="light"] .welcome-screen{background:radial-gradient(circle at 18
 }
 .activity-progress.success .activity-progress-track i { width: 100%; background: #65c9a8; }
 .activity-progress.error .activity-progress-track i { width: 100%; background: #ef7665; }
+.tutorial-practice-banner { position:fixed;z-index:145;top:72px;left:50%;width:min(680px,calc(100vw - 40px));transform:translateX(-50%);display:flex;align-items:center;justify-content:space-between;gap:14px;padding:8px 10px 8px 13px;border:1px solid color-mix(in srgb,#e5c65a 60%,var(--line));border-radius:9px;color:var(--muted);background:color-mix(in srgb,var(--panel) 96%,#e5c65a 4%);box-shadow:0 12px 36px rgba(0,0,0,.34);font-size:8px}.tutorial-practice-banner strong{color:#e5c65a}.tutorial-practice-banner button{flex:none;padding:5px 8px;font-size:8px}
 @keyframes activity-slide { from { transform: translateX(-110%); } to { transform: translateX(300%); } }
 body[data-theme="light"] .activity-progress { background: rgba(250,252,252,.97); border-color: #b8c9cc; box-shadow: 0 10px 28px rgba(35,55,60,.16); }
 .brand, .top-actions { display: flex; align-items: center; gap: 10px; }
@@ -1116,9 +1117,10 @@ body[data-theme="light"] .brand-logo { filter: drop-shadow(0 3px 8px rgba(31,46,
 }
 .tutorial-step-list strong { display: block; margin-bottom: 3px; color: var(--text); font-size: 10px; }
 .tutorial-step-list span { color: var(--muted); font-size: 9px; line-height: 1.45; }
-.tutorial-detail-actions { display: flex; gap: 8px; margin-top: 16px; }
+.tutorial-step-list em{display:block;margin-top:5px;color:var(--teal);font-size:8px;font-style:normal;line-height:1.4}
+.tutorial-detail-actions { display: flex;align-items:center;gap:10px;margin-top:16px; }.tutorial-detail-actions>span{max-width:440px;color:var(--muted);font-size:8px;line-height:1.45}
 .guided-tour { position: fixed; z-index: 220; inset: 0; pointer-events: none; }
-.guided-tour-shade { position: absolute; inset: 0; background: transparent; pointer-events: auto; }
+.guided-tour-shade { position: absolute; inset: 0; background: transparent; pointer-events: none; }
 .guided-tour-focus {
   position: fixed; z-index: 1; border: 3px solid var(--teal); border-radius: 12px;
   box-shadow: 0 0 0 9999px rgba(3, 8, 11, .44), 0 0 0 6px color-mix(in srgb, var(--teal) 22%, transparent);
@@ -1134,8 +1136,9 @@ body[data-theme="light"] .brand-logo { filter: drop-shadow(0 3px 8px rgba(31,46,
 .guided-tour-card-heading button { min-width: 28px; padding: 3px 7px; font-size: 15px; }
 .guided-tour-card h3 { margin: 8px 0 6px; font-size: 16px; }
 .guided-tour-card p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.guided-tour-task{display:grid;gap:4px;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2)}.guided-tour-task small{color:var(--teal);font-size:7px;letter-spacing:.12em}.guided-tour-task strong{font-size:9px;line-height:1.45}.guided-tour-status{display:flex;align-items:center;gap:7px;margin-top:9px;color:var(--muted);font-size:8px}.guided-tour-status span{width:8px;height:8px;border-radius:50%;background:#e5c65a;box-shadow:0 0 0 3px color-mix(in srgb,#e5c65a 14%,transparent)}.guided-tour-status.complete{color:#83d8c2}.guided-tour-status.complete span{background:var(--teal);box-shadow:0 0 0 3px color-mix(in srgb,var(--teal) 16%,transparent)}
 .guided-tour-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
-.guided-tour-actions button { min-width: 88px; }
+.guided-tour-actions button { min-width: 82px; }.guided-tour-actions button:disabled{cursor:not-allowed;opacity:.42}
 body.tutorial-active { overflow: hidden; }
 
 @media (max-width: 1250px) {
