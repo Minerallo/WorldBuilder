@@ -539,12 +539,15 @@ body[data-theme="light"] .toolbar-menu-content { background: #f8faf9; }
 .toolbar-menu-content button { width: 100%; text-align: left; }
 body[data-theme="light"] .toolbar-menu > summary { color: #172126; }
 .workspace-launcher > summary { display:flex;align-items:center;gap:6px;font-weight:650; }
+.experimental-label,.experimental-chip { display:inline-flex;align-items:center;padding:2px 5px;border:1px solid color-mix(in srgb,#e5c65a 55%,var(--line));border-radius:999px;color:#e5c65a;background:color-mix(in srgb,#e5c65a 10%,var(--panel));font:800 6px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.07em;text-transform:uppercase; }
+.workspace-launcher > summary .experimental-label { margin-left:1px; }
 .workspace-launcher-content {
   width:min(650px,calc(100vw - 390px));max-height:min(720px,calc(100vh - 105px));overflow:auto;
   gap:10px;padding:12px;border-radius:12px;
 }
 .workspace-launcher-heading { display:flex;align-items:center;justify-content:space-between;padding:1px 2px 3px; }
 .workspace-launcher-heading>div { display:grid;gap:3px; }.workspace-launcher-heading strong{font-size:13px}.workspace-launcher-heading small{padding:0}
+.workspace-experimental-note { margin:0;padding:8px 9px;border:1px solid color-mix(in srgb,#e5c65a 35%,var(--line));border-radius:7px;color:var(--muted);background:color-mix(in srgb,#e5c65a 7%,var(--canvas));font-size:7px;line-height:1.45; }.workspace-experimental-note strong{color:#e5c65a}
 .workspace-launcher kbd,.workspace-launcher-content footer kbd { padding:2px 6px;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;color:var(--muted);background:var(--canvas);font:700 8px ui-monospace,SFMono-Regular,Menlo,monospace; }
 .workspace-search { width:100%;box-sizing:border-box;padding:9px 10px;border-radius:8px;font-size:10px; }
 .workspace-launcher-group { display:grid;gap:6px; }
@@ -562,7 +565,11 @@ body[data-theme="light"] .toolbar-menu > summary { color: #172126; }
 .workspace-card-icon.thermal{color:#ff8b57}.workspace-card-icon.gravity{color:#9eafff}.workspace-card-icon.stress{color:#ff7c9b}
 .workspace-card-icon.statistics{color:#62cbd2}
 .workspace-card em { position:absolute;top:5px;right:6px;padding:2px 4px;border-radius:4px;color:#1a2522;background:var(--teal);font-size:6px;font-style:normal;font-weight:850;letter-spacing:.08em; }
+.workspace-card.experimental-workflow::after { content:"EXPERIMENTAL";position:absolute;top:5px;right:6px;padding:2px 4px;border:1px solid color-mix(in srgb,#e5c65a 45%,transparent);border-radius:4px;color:#e5c65a;background:color-mix(in srgb,#e5c65a 10%,var(--panel));font-size:5px;font-style:normal;font-weight:850;letter-spacing:.07em; }
 .workspace-card-planned { opacity:.66; }.workspace-card-planned em{color:var(--muted);background:var(--panel-2);border:1px solid var(--line)}
+.workspace-card.experimental-workflow>span:nth-child(2){padding-right:40px}
+:is(#map-editor,#tomography-editor,#lithosphere-editor,#planetary-editor,#research-editor,#gravity-editor,#stress-editor,#thermal-conduction-editor,#computation-editor,#field-calculator) .shape-editor-header strong::after,
+:is(#gravity-workspace,#stress-workspace,#thermal-workspace,#rheology-workspace,#statistics-workspace) :is(.gravity-workspace-header,.stress-workspace-header,.thermal-workspace-header,.statistics-workspace-header)>div>strong::after { content:"Experimental";display:inline-flex;margin-left:7px;padding:2px 5px;border:1px solid color-mix(in srgb,#e5c65a 55%,var(--line));border-radius:999px;color:#e5c65a;background:color-mix(in srgb,#e5c65a 10%,var(--panel));font:800 6px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.07em;text-transform:uppercase;vertical-align:middle; }
 .workspace-launcher-empty { padding:16px;border:1px dashed var(--line);border-radius:8px;color:var(--muted);font-size:9px;text-align:center; }
 .workspace-launcher-content footer { display:flex;align-items:center;justify-content:space-between;padding:7px 3px 0;border-top:1px solid var(--line);color:var(--muted);font-size:7px; }
 .workspace-launcher-content footer a { color:var(--teal);text-decoration:none;font-weight:700; }

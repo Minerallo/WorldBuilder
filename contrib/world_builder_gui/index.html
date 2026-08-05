@@ -303,40 +303,41 @@
         </div>
         <button id="toggle-shape-editor" class="icon-button" aria-expanded="false">Shape editor</button>
         <details id="workspace-launcher" class="toolbar-menu workspace-launcher">
-          <summary title="Open a scientific workspace (W)" aria-keyshortcuts="W"><span aria-hidden="true">◫</span> Workspaces</summary>
+          <summary title="Open an experimental scientific workspace (W)" aria-keyshortcuts="W"><span aria-hidden="true">◫</span> Workspaces <span class="experimental-label">Experimental</span></summary>
           <div class="toolbar-menu-content workspace-launcher-content">
             <div class="workspace-launcher-heading">
-              <div><small>SCIENTIFIC MODULES</small><strong>Choose a workspace</strong></div>
+              <div><small>EXPERIMENTAL SCIENTIFIC MODULES</small><strong>Choose a workspace</strong></div>
               <kbd>W</kbd>
             </div>
+            <p class="workspace-experimental-note"><strong>Experimental workflows</strong> are available for exploration and reproducible prototyping. Review assumptions and exported results before scientific use.</p>
             <input id="workspace-search" class="workspace-search" type="search" placeholder="Search thermal, maps, gravity…" aria-label="Search workspaces">
             <div id="workspace-launcher-empty" class="workspace-launcher-empty hidden">No workspace matches that search.</div>
             <section class="workspace-launcher-group" data-workspace-group>
               <header><span>Build &amp; data</span><small>Inputs and model context</small></header>
               <div class="workspace-launcher-grid">
-                <button id="toggle-map-editor" class="workspace-card" aria-expanded="false" data-workspace-search="reference map image gis background"><span class="workspace-card-icon">▧</span><span><strong>Reference map</strong><small>Trace features over maps and imagery</small></span></button>
-                <button id="toggle-tomography" class="workspace-card tomography-button" aria-expanded="false" data-workspace-search="tomography dvs dvp isosurface seismic"><span class="workspace-card-icon">◉</span><span><strong>Tomography</strong><small>Explore numerical seismic models</small></span></button>
-                <button id="toggle-lithosphere" class="workspace-card lithosphere-button" aria-expanded="false" data-workspace-search="lithosphere crust litho1 earthscope data"><span class="workspace-card-icon">▤</span><span><strong>Lithosphere models</strong><small>Load crust and LAB data products</small></span></button>
-                <button id="toggle-planetary" class="workspace-card planetary-button" aria-expanded="false" data-workspace-search="planetary mars venus moon mercury bodies"><span class="workspace-card-icon">◌</span><span><strong>Planetary bodies</strong><small>Configure non-Earth domains and data</small></span></button>
+                <button id="toggle-map-editor" class="workspace-card experimental-workflow" aria-expanded="false" data-workspace-search="reference map image gis background"><span class="workspace-card-icon">▧</span><span><strong>Reference map</strong><small>Trace features over maps and imagery</small></span></button>
+                <button id="toggle-tomography" class="workspace-card experimental-workflow tomography-button" aria-expanded="false" data-workspace-search="tomography dvs dvp isosurface seismic"><span class="workspace-card-icon">◉</span><span><strong>Tomography</strong><small>Explore numerical seismic models</small></span></button>
+                <button id="toggle-lithosphere" class="workspace-card experimental-workflow lithosphere-button" aria-expanded="false" data-workspace-search="lithosphere crust litho1 earthscope data"><span class="workspace-card-icon">▤</span><span><strong>Lithosphere models</strong><small>Load crust and LAB data products</small></span></button>
+                <button id="toggle-planetary" class="workspace-card experimental-workflow planetary-button" aria-expanded="false" data-workspace-search="planetary mars venus moon mercury bodies"><span class="workspace-card-icon">◌</span><span><strong>Planetary bodies</strong><small>Configure non-Earth domains and data</small></span></button>
               </div>
             </section>
             <section class="workspace-launcher-group" data-workspace-group>
               <header><span>Physics &amp; analysis</span><small>Compute and interpret</small></header>
               <div class="workspace-launcher-grid">
-                <button id="toggle-thermal-conduction" class="workspace-card thermal-conduction-button" aria-expanded="false" data-workspace-search="thermal conduction temperature heat geotherm"><span class="workspace-card-icon thermal">♨</span><span><strong>Thermal conduction</strong><small>Steady and transient temperature</small></span><em>NEW</em></button>
-                <button id="toggle-rheology" class="workspace-card rheology-button" aria-expanded="false" data-workspace-search="rheology strength brittle ductile bdt plastic viscous strain rate seismicity earthquakes"><span class="workspace-card-icon rheology">ϵ̇</span><span><strong>Rheology &amp; seismicity</strong><small>Strength envelopes, BDT and earthquakes</small></span><em>NEW</em></button>
-                <button id="toggle-gravity" class="workspace-card gravity-button" aria-expanded="false" data-workspace-search="gravity bouguer free air tensor density"><span class="workspace-card-icon gravity">g</span><span><strong>Gravity</strong><small>Anomalies, sections and contours</small></span></button>
-                <button id="toggle-stress" class="workspace-card stress-button" aria-expanded="false" data-workspace-search="stress dykes vents magma elastic"><span class="workspace-card-icon stress">σ</span><span><strong>Stress &amp; dykes</strong><small>Stress fields and path comparison</small></span></button>
-                <button id="toggle-statistics" class="workspace-card statistics-button" aria-expanded="false" data-workspace-search="statistics validation spatial correlation moran misfit rmse pearson vents"><span class="workspace-card-icon statistics">Σ</span><span><strong>Statistics &amp; validation</strong><small>Spatial correlation and model misfit</small></span><em>NEW</em></button>
-                <button id="toggle-computation" class="workspace-card compute-button" aria-expanded="false" data-workspace-search="model computation wasm isostasy thermal state"><span class="workspace-card-icon">▶</span><span><strong>Model computation</strong><small>Run WebAssembly model operations</small></span></button>
+                <button id="toggle-thermal-conduction" class="workspace-card experimental-workflow thermal-conduction-button" aria-expanded="false" data-workspace-search="thermal conduction temperature heat geotherm"><span class="workspace-card-icon thermal">♨</span><span><strong>Thermal conduction</strong><small>Steady and transient temperature</small></span></button>
+                <button id="toggle-rheology" class="workspace-card experimental-workflow rheology-button" aria-expanded="false" data-workspace-search="rheology strength brittle ductile bdt plastic viscous strain rate seismicity earthquakes"><span class="workspace-card-icon rheology">ϵ̇</span><span><strong>Rheology &amp; seismicity</strong><small>Strength envelopes, BDT and earthquakes</small></span></button>
+                <button id="toggle-gravity" class="workspace-card experimental-workflow gravity-button" aria-expanded="false" data-workspace-search="gravity bouguer free air tensor density"><span class="workspace-card-icon gravity">g</span><span><strong>Gravity</strong><small>Anomalies, sections and contours</small></span></button>
+                <button id="toggle-stress" class="workspace-card experimental-workflow stress-button" aria-expanded="false" data-workspace-search="stress dykes vents magma elastic"><span class="workspace-card-icon stress">σ</span><span><strong>Stress &amp; dykes</strong><small>Stress fields and path comparison</small></span></button>
+                <button id="toggle-statistics" class="workspace-card experimental-workflow statistics-button" aria-expanded="false" data-workspace-search="statistics validation spatial correlation moran misfit rmse pearson vents"><span class="workspace-card-icon statistics">Σ</span><span><strong>Statistics &amp; validation</strong><small>Spatial correlation and model misfit</small></span></button>
+                <button id="toggle-computation" class="workspace-card experimental-workflow compute-button" aria-expanded="false" data-workspace-search="model computation wasm isostasy thermal state"><span class="workspace-card-icon">▶</span><span><strong>Model computation</strong><small>Run WebAssembly model operations</small></span></button>
                 <button class="workspace-card workspace-card-planned" disabled data-workspace-search="surface processes erosion deposition landlab fastscape uplift rivers"><span class="workspace-card-icon">⌁</span><span><strong>Surface processes</strong><small>Erosion, drainage and deposition</small></span><em>PLANNED</em></button>
               </div>
             </section>
             <section class="workspace-launcher-group" data-workspace-group>
               <header><span>Utilities</span><small>Inspect, derive and learn</small></header>
               <div class="workspace-launcher-grid">
-                <button id="toggle-field-calculator" class="workspace-card calculator-button" aria-expanded="false" data-workspace-search="field calculator gradient plus minus layers"><span class="workspace-card-icon">ƒ</span><span><strong>Field calculator</strong><small>Combine and derive numerical fields</small></span></button>
-                <button id="toggle-research" class="workspace-card research-button" aria-expanded="false" data-workspace-search="research search manual examples functions"><span class="workspace-card-icon">?</span><span><strong>Research functions</strong><small>Search tools, examples and the manual</small></span></button>
+                <button id="toggle-field-calculator" class="workspace-card experimental-workflow calculator-button" aria-expanded="false" data-workspace-search="field calculator gradient plus minus layers"><span class="workspace-card-icon">ƒ</span><span><strong>Field calculator</strong><small>Combine and derive numerical fields</small></span></button>
+                <button id="toggle-research" class="workspace-card experimental-workflow research-button" aria-expanded="false" data-workspace-search="research search manual examples functions"><span class="workspace-card-icon">?</span><span><strong>Research functions</strong><small>Search tools, examples and the manual</small></span></button>
               </div>
             </section>
             <footer><span>Tip: press <kbd>W</kbd> anywhere to open this launcher.</span><a href="https://gwb.readthedocs.io/" target="_blank" rel="noreferrer">GWB manual ↗</a></footer>
