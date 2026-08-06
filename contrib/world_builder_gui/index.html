@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Visual model builder for the Geodynamic World Builder">
   <title>GWB Visual Builder</title>
-  <link rel="stylesheet" href="styles.css?v=52">
+  <link rel="stylesheet" href="styles.css?v=53">
 </head>
 <body>
   <section id="welcome-screen" class="welcome-screen hidden" aria-labelledby="welcome-title">
@@ -1480,10 +1480,17 @@
         <button id="guided-tour-skip" class="ghost">Skip step</button>
         <button id="guided-tour-next" class="primary" disabled>Continue</button>
       </div>
+      <div id="guided-tour-completion" class="guided-tour-completion hidden">
+        <label for="guided-tour-next-tutorial">Continue learning with</label>
+        <select id="guided-tour-next-tutorial" aria-label="Choose another tutorial"></select>
+        <button id="guided-tour-run-another" class="primary">Start another tutorial from scratch</button>
+        <button id="guided-tour-finish" class="ghost">Close interactive tutorial</button>
+        <small>A new clean practice model will be created. Your saved project remains unchanged.</small>
+      </div>
     </section>
   </div>
 
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="app.js?v=94"></script>
+  <script type="module" src="app.js?v=95"></script>
 </body>
 </html>

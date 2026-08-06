@@ -67,7 +67,8 @@ The prototype supports:
   spherical chunk grids convert editor depth bounds to native radial bounds.
 - Drawing cross sections directly on the plan view.
 - A searchable library generated from the official tutorials, cookbooks, and
-  tested reference models.
+  tested reference models, with action-gated practice lessons and a completion
+  screen that can launch another tutorial from a clean temporary model.
 - Lossless import and re-export of advanced World Builder parameters.
 - An advanced per-feature JSON editor for parameters not yet represented by a
   dedicated graphical control.

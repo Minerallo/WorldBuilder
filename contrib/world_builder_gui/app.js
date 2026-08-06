@@ -359,6 +359,7 @@ let guidedTutorial = null;
 let guidedTutorialStep = 0;
 let guidedStepComplete = false;
 let guidedStepActionCount = 0;
+let guidedTutorialCompletionVisible = false;
 let spatialControls = null;
 let spatialXRPreview = null;
 let spatialSettings = loadSpatialSettings();
@@ -6521,10 +6522,16 @@ function guardGuidedTutorialInteraction(event) {
 
 function positionGuidedTutorial() {
   if (!guidedTutorial) return;
+  const tour = document.querySelector("#guided-tour");
+  const card = document.querySelector("#guided-tour-card");
+  if (guidedTutorialCompletionVisible) {
+    if (tour.parentElement !== document.body) document.body.appendChild(tour);
+    Object.assign(card.style, { left:"50%", top:"50%", transform:"translate(-50%, -50%)" });
+    return;
+  }
   const step = guidedTutorial.steps[guidedTutorialStep];
   const target = document.querySelector(step.target) || document.querySelector(".stage");
   if (!target) return;
-  const tour = document.querySelector("#guided-tour");
   const targetDialog = target.closest("dialog[open]");
   if (targetDialog && tour.parentElement !== targetDialog) targetDialog.appendChild(tour);
   if (!targetDialog && tour.parentElement !== document.body) document.body.appendChild(tour);
@@ -6540,7 +6547,7 @@ function positionGuidedTutorial() {
     left: `${left}px`, top: `${top}px`,
     width: `${Math.max(28, right - left)}px`, height: `${Math.max(28, bottom - top)}px`
   });
-  const card = document.querySelector("#guided-tour-card");
+  card.style.transform = "none";
   const cardWidth = Math.min(330, window.innerWidth - 24);
   const measuredHeight = Math.max(190, card.getBoundingClientRect().height || 190);
   let cardLeft;
@@ -6562,6 +6569,13 @@ function positionGuidedTutorial() {
 
 function renderGuidedTutorialStep() {
   if (!guidedTutorial) return;
+  guidedTutorialCompletionVisible = false;
+  const tour = document.querySelector("#guided-tour");
+  tour.classList.remove("completion");
+  document.querySelector(".guided-tour-task").hidden = false;
+  document.querySelector("#guided-tour-status").hidden = false;
+  document.querySelector(".guided-tour-actions").hidden = false;
+  document.querySelector("#guided-tour-completion").classList.add("hidden");
   const step = guidedTutorial.steps[guidedTutorialStep];
   guidedStepComplete = !step.action;
   guidedStepActionCount = 0;
@@ -6626,7 +6640,7 @@ function handleGuidedTutorialAction(event) {
 function advanceGuidedTutorial() {
   if (!guidedTutorial || !guidedStepComplete) return;
   if (guidedTutorialStep >= guidedTutorial.steps.length - 1) {
-    closeGuidedTutorial({ complete:true, reopen:!IS_TUTORIAL_PRACTICE });
+    showGuidedTutorialCompletion();
     showToast(`${activeTutorial().shortTitle} tutorial completed`);
     return;
   }
@@ -6645,6 +6659,7 @@ function startGuidedTutorial(tutorial = activeTutorial()) {
   if (document.querySelector("#tutorial-dialog").open) document.querySelector("#tutorial-dialog").close();
   guidedTutorial = tutorial;
   guidedTutorialStep = 0;
+  guidedTutorialCompletionVisible = false;
   const tour = document.querySelector("#guided-tour");
   tour.classList.remove("hidden");
   tour.setAttribute("aria-hidden", "false");
@@ -6662,22 +6677,67 @@ function openTutorialPractice(tutorial = activeTutorial()) {
   else document.querySelector("#tutorial-dialog").close();
 }
 
+function markTutorialComplete(tutorial) {
+  const progress = tutorialProgress();
+  const current = progress[tutorial.id] || {};
+  progress[tutorial.id] = { ...current, complete:true, completedAt:new Date().toISOString() };
+  saveTutorialProgress(progress);
+}
+
+function showGuidedTutorialCompletion() {
+  if (!guidedTutorial) return;
+  markTutorialComplete(guidedTutorial);
+  guidedTutorialCompletionVisible = true;
+  clearGuidedTutorialTargets();
+  const currentIndex = TUTORIALS.findIndex(tutorial => tutorial.id === guidedTutorial.id);
+  const alternatives = TUTORIALS.filter(tutorial => tutorial.id !== guidedTutorial.id);
+  const nextDefault = TUTORIALS[(currentIndex + 1) % TUTORIALS.length];
+  const select = document.querySelector("#guided-tour-next-tutorial");
+  select.innerHTML = alternatives.map(tutorial => `<option value="${tutorial.id}"${tutorial.id === nextDefault.id ? " selected" : ""}>${escapeHtml(tutorial.shortTitle)} · ${tutorial.duration}</option>`).join("");
+  document.querySelector("#guided-tour-progress").textContent = "Tutorial complete";
+  document.querySelector("#guided-tour-title").textContent = `${guidedTutorial.shortTitle} completed`;
+  document.querySelector("#guided-tour-copy").textContent = "Well done. You can start another guided workflow with a clean practice model, or close this temporary tutorial window.";
+  document.querySelector(".guided-tour-task").hidden = true;
+  document.querySelector("#guided-tour-status").hidden = true;
+  document.querySelector(".guided-tour-actions").hidden = true;
+  document.querySelector("#guided-tour-completion").classList.remove("hidden");
+  document.querySelector("#guided-tour").classList.add("completion");
+  positionGuidedTutorial();
+}
+
+function runAnotherTutorialFromScratch() {
+  const tutorial = TUTORIALS.find(item => item.id === document.querySelector("#guided-tour-next-tutorial").value);
+  if (!tutorial) return;
+  if (!IS_TUTORIAL_PRACTICE) {
+    closeGuidedTutorial();
+    openTutorialPractice(tutorial);
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set("tutorial",tutorial.id);
+  url.searchParams.set("practice","1");
+  window.location.replace(url.toString());
+}
+
+function closeTutorialPracticeWindow() {
+  if (guidedTutorial) closeGuidedTutorial();
+  window.close();
+  setTimeout(() => { if (!window.closed) window.location.href = window.location.pathname; },100);
+}
+
 function closeGuidedTutorial({ complete = false, reopen = false } = {}) {
   if (!guidedTutorial) return;
   const completedTutorial = guidedTutorial;
-  if (complete) {
-    const progress = tutorialProgress();
-    const current = progress[completedTutorial.id] || {};
-    progress[completedTutorial.id] = { ...current, complete: true, completedAt: new Date().toISOString() };
-    saveTutorialProgress(progress);
-  }
+  if (complete) markTutorialComplete(completedTutorial);
   if (tool === "section") cancelSectionPath();
   guidedTutorial = null;
   guidedTutorialStep = 0;
   guidedStepComplete = false;
   guidedStepActionCount = 0;
+  guidedTutorialCompletionVisible = false;
   const tour = document.querySelector("#guided-tour");
   tour.classList.add("hidden");
+  tour.classList.remove("completion");
   tour.setAttribute("aria-hidden", "true");
   if (tour.parentElement !== document.body) document.body.appendChild(tour);
   document.body.classList.remove("tutorial-active");
@@ -10614,7 +10674,10 @@ document.querySelector("#reset-tutorial-progress").addEventListener("click", () 
   renderTutorialDetail();
   showToast("Tutorial progress reset");
 });
-document.querySelector("#close-guided-tour").addEventListener("click", () => closeGuidedTutorial({ reopen: !IS_TUTORIAL_PRACTICE }));
+document.querySelector("#close-guided-tour").addEventListener("click", () => {
+  if (guidedTutorialCompletionVisible && IS_TUTORIAL_PRACTICE) closeTutorialPracticeWindow();
+  else closeGuidedTutorial({ reopen: !IS_TUTORIAL_PRACTICE });
+});
 document.querySelector("#guided-tour-previous").addEventListener("click", () => {
   if (!guidedTutorial || guidedTutorialStep <= 0) return;
   guidedTutorialStep -= 1;
@@ -10622,13 +10685,16 @@ document.querySelector("#guided-tour-previous").addEventListener("click", () => 
 });
 document.querySelector("#guided-tour-skip").addEventListener("click", skipGuidedTutorialStep);
 document.querySelector("#guided-tour-next").addEventListener("click", advanceGuidedTutorial);
+document.querySelector("#guided-tour-run-another").addEventListener("click", runAnotherTutorialFromScratch);
+document.querySelector("#guided-tour-finish").addEventListener("click", () => {
+  if (IS_TUTORIAL_PRACTICE) closeTutorialPracticeWindow();
+  else closeGuidedTutorial({ reopen:true });
+});
 ["click","input","change","pointerup"].forEach(type => document.addEventListener(type,handleGuidedTutorialAction));
 ["pointerdown","click","dblclick","input","change"].forEach(type =>
   document.addEventListener(type,guardGuidedTutorialInteraction,{ capture:true }));
 document.querySelector("#exit-tutorial-practice").addEventListener("click", () => {
-  if (guidedTutorial) closeGuidedTutorial();
-  window.close();
-  setTimeout(() => { if (!window.closed) window.location.href = window.location.pathname; },100);
+  closeTutorialPracticeWindow();
 });
 document.querySelector("#example-search").addEventListener("input", event => { exampleQuery = event.target.value; renderExamples(); });
 document.querySelector("#example-category").addEventListener("change", event => { exampleCategory = event.target.value; renderExamples(); });
@@ -10826,7 +10892,8 @@ window.addEventListener("keydown", event => {
   if (guidedTutorial) {
     if (event.key === "Escape") {
       event.preventDefault();
-      closeGuidedTutorial({ reopen: !IS_TUTORIAL_PRACTICE });
+      if (guidedTutorialCompletionVisible && IS_TUTORIAL_PRACTICE) closeTutorialPracticeWindow();
+      else closeGuidedTutorial({ reopen: !IS_TUTORIAL_PRACTICE });
     }
     return;
   }

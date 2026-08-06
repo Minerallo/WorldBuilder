@@ -1151,6 +1151,9 @@ body[data-theme="light"] .brand-logo { filter: drop-shadow(0 3px 8px rgba(31,46,
 .guided-tour-task{display:grid;gap:4px;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2)}.guided-tour-task small{color:var(--teal);font-size:7px;letter-spacing:.12em}.guided-tour-task strong{font-size:9px;line-height:1.45}.guided-tour-status{display:flex;align-items:center;gap:7px;margin-top:9px;color:var(--muted);font-size:8px}.guided-tour-status span{width:8px;height:8px;border-radius:50%;background:#e5c65a;box-shadow:0 0 0 3px color-mix(in srgb,#e5c65a 14%,transparent)}.guided-tour-status.complete{color:#83d8c2}.guided-tour-status.complete span{background:var(--teal);box-shadow:0 0 0 3px color-mix(in srgb,var(--teal) 16%,transparent)}
 .guided-tour-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
 .guided-tour-actions button { min-width: 82px; }.guided-tour-actions button:disabled{cursor:not-allowed;opacity:.42}
+.guided-tour-completion{display:grid;gap:9px;margin-top:15px;padding-top:14px;border-top:1px solid var(--line)}
+.guided-tour-completion.hidden{display:none}.guided-tour-completion label{color:var(--muted);font-size:8px}.guided-tour-completion select{width:100%}.guided-tour-completion button{width:100%}.guided-tour-completion small{color:var(--muted);font-size:7px;line-height:1.45;text-align:center}
+.guided-tour.completion .guided-tour-focus{display:none}.guided-tour.completion .guided-tour-card{border-color:#83d8c2;box-shadow:0 22px 80px rgba(0,0,0,.62),0 0 0 5px color-mix(in srgb,var(--teal) 12%,transparent)}
 body.tutorial-active { overflow: hidden; }
 body.tutorial-restricted :is(button,input,select,textarea,summary,canvas,[role="button"]) { cursor: not-allowed; }
 body.tutorial-restricted :is(.tutorial-interaction-allowed,#guided-tour-card button,#exit-tutorial-practice),
