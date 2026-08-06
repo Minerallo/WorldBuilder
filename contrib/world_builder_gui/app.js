@@ -125,7 +125,14 @@ const DEFAULT_UI = {
   gravityWorkspaceMinimized: false, gravityWorkspaceLayout: "triple",
   gravityWorkspaceContoursOnly: false,
   gravityWorkspaceSectionPicking: false, gravityWorkspaceContourEditing: false,
-  compactPanel: null
+  minimizedEditors: [], minimizedWorkspaces: [], compactPanel: null
+};
+const FLOATING_EDITOR_TOGGLES = {
+  "shape-editor":"toggle-shape-editor","map-editor":"toggle-map-editor","spatial-editor":"toggle-spatial-controls",
+  "tomography-editor":"toggle-tomography","lithosphere-editor":"toggle-lithosphere","planetary-editor":"toggle-planetary",
+  "research-editor":"toggle-research","gravity-editor":"toggle-gravity","stress-editor":"toggle-stress",
+  "thermal-conduction-editor":"toggle-thermal-conduction","computation-editor":"toggle-computation",
+  "appearance-editor":"toggle-appearance","color-editor":"toggle-color-editor","field-calculator":"toggle-field-calculator"
 };
 const primaryCanvas = document.querySelector("#model-canvas");
 const primaryContext = primaryCanvas.getContext("2d");
@@ -794,6 +801,55 @@ function bindFloatingEditor(editor) {
   new MutationObserver(() => {
     if (!editor.classList.contains("hidden")) requestAnimationFrame(() => positionFloatingEditor(editor));
   }).observe(editor, { attributes: true, attributeFilter: ["class"] });
+}
+
+function floatingEditorLabel(editor) {
+  return editor.querySelector(".shape-editor-header strong")?.textContent?.trim()||editor.getAttribute("aria-label")||editor.id;
+}
+
+function ensureFloatingEditorDockItem(editor) {
+  const dock=document.querySelector("#workspace-dock");
+  const id=`restore-${editor.id}`;
+  let restore=document.querySelector(`#${id}`);
+  if(restore)return restore;
+  restore=document.createElement("button");restore.id=id;restore.className="workspace-dock-item";restore.hidden=true;
+  restore.title=`Restore ${floatingEditorLabel(editor)}`;
+  restore.innerHTML=`<span class="workspace-dock-grip" aria-hidden="true"></span><span class="workspace-dock-icon" aria-hidden="true">▣</span><span><strong>${escapeHtml(floatingEditorLabel(editor))}</strong><small>Workspace controls preserved</small></span><span class="workspace-dock-restore" aria-hidden="true">↗</span>`;
+  restore.addEventListener("click",()=>setFloatingEditorMinimized(editor,false));
+  dock.appendChild(restore);return restore;
+}
+
+function setFloatingEditorMinimized(editor,minimized,{save=true,announce=true}={}) {
+  if(!editor)return;
+  state.ui.minimizedEditors=Array.isArray(state.ui.minimizedEditors)?state.ui.minimizedEditors:[];
+  const ids=new Set(state.ui.minimizedEditors);
+  if(minimized)ids.add(editor.id);else ids.delete(editor.id);
+  state.ui.minimizedEditors=[...ids];
+  const restore=ensureFloatingEditorDockItem(editor);restore.hidden=!minimized;
+  const toggle=document.querySelector(`#${FLOATING_EDITOR_TOGGLES[editor.id]}`);
+  if(minimized){editor.classList.add("hidden");toggle?.setAttribute("aria-expanded","false");}
+  else{editor.classList.remove("hidden");toggle?.setAttribute("aria-expanded","true");requestAnimationFrame(()=>positionFloatingEditor(editor));}
+  syncWorkspaceDock();if(save)persist();
+  if(announce)showToast(`${floatingEditorLabel(editor)} ${minimized?"minimized · click its dock card to restore":"restored"}`);
+}
+
+function installFloatingEditorMinimizers() {
+  document.querySelectorAll(".shape-editor, .map-editor").forEach(editor=>{
+    const header=editor.querySelector(".shape-editor-header");if(!header)return;
+    let actions=header.querySelector(":scope > .floating-editor-header-actions");
+    if(!actions){actions=document.createElement("span");actions.className="floating-editor-header-actions";header.querySelectorAll(":scope > button").forEach(button=>actions.appendChild(button));header.appendChild(actions);}
+    const minimize=document.createElement("button");minimize.type="button";minimize.className="ghost floating-editor-minimize";minimize.textContent="—";minimize.title=`Minimize ${floatingEditorLabel(editor)}`;minimize.setAttribute("aria-label",minimize.title);
+    minimize.addEventListener("click",()=>setFloatingEditorMinimized(editor,true));actions.prepend(minimize);
+    ensureFloatingEditorDockItem(editor);
+    new MutationObserver(()=>{
+      if(!editor.classList.contains("hidden")&&state.ui.minimizedEditors?.includes(editor.id))setFloatingEditorMinimized(editor,false,{announce:false});
+    }).observe(editor,{attributes:true,attributeFilter:["class"]});
+  });
+  const minimized=new Set(Array.isArray(state.ui.minimizedEditors)?state.ui.minimizedEditors:[]);
+  document.querySelectorAll(".shape-editor, .map-editor").forEach(editor=>{
+    if(minimized.has(editor.id))setFloatingEditorMinimized(editor,true,{save:false,announce:false});
+    else ensureFloatingEditorDockItem(editor).hidden=true;
+  });
 }
 
 function screenPointToCanvas(screenX, screenY) {
@@ -4819,32 +4875,43 @@ function syncWorkspaceDock() {
   const dock = document.querySelector("#workspace-dock");
   const gravityRestore = document.querySelector("#restore-gravity-workspace");
   if (gravityRestore) gravityRestore.hidden = !Boolean(state.ui?.gravityWorkspaceMinimized);
+  const minimized=new Set(Array.isArray(state.ui?.minimizedWorkspaces)?state.ui.minimizedWorkspaces:[]);
+  ["stress-workspace","thermal-workspace","rheology-workspace","statistics-workspace","spatial-xr-workspace"].forEach(dialogId=>{
+    const restore=document.querySelector(`#restore-${dialogId}`);if(restore)restore.hidden=!minimized.has(dialogId);
+  });
   const hasMinimizedWorkspace = [...dock.querySelectorAll(".workspace-dock-item")].some(button => !button.hidden);
   dock.classList.toggle("hidden", !hasMinimizedWorkspace);
   dock.setAttribute("aria-hidden", String(!hasMinimizedWorkspace));
 }
 
 function minimizeSimpleWorkspace(dialogId, restoreId) {
-  document.querySelector(`#${dialogId}`)?.close();
+  const dialog=document.querySelector(`#${dialogId}`);
+  if(dialog?.open)dialog.close();
+  state.ui.minimizedWorkspaces=Array.isArray(state.ui.minimizedWorkspaces)?state.ui.minimizedWorkspaces:[];
+  if(!state.ui.minimizedWorkspaces.includes(dialogId))state.ui.minimizedWorkspaces.push(dialogId);
   const restore = document.querySelector(`#${restoreId}`);
   if (restore) restore.hidden = false;
-  syncWorkspaceDock();
+  syncWorkspaceDock();persist();
 }
 
 function restoreSimpleWorkspace(dialogId, restoreId, render) {
+  state.ui.minimizedWorkspaces=(state.ui.minimizedWorkspaces||[]).filter(id=>id!==dialogId);
   const restore = document.querySelector(`#${restoreId}`);
   if (restore) restore.hidden = true;
   syncWorkspaceDock();
   const dialog = document.querySelector(`#${dialogId}`);
   if (dialog && !dialog.open) dialog.showModal();
   if (render) requestAnimationFrame(render);
+  persist();
 }
 
 function closeSimpleWorkspace(dialogId, restoreId) {
-  document.querySelector(`#${dialogId}`)?.close();
+  const dialog=document.querySelector(`#${dialogId}`);
+  if(dialog?.open)dialog.close();
+  state.ui.minimizedWorkspaces=(state.ui.minimizedWorkspaces||[]).filter(id=>id!==dialogId);
   const restore = document.querySelector(`#${restoreId}`);
   if (restore) restore.hidden = true;
-  syncWorkspaceDock();
+  syncWorkspaceDock();persist();
 }
 
 function syncGravityWorkspaceControls() {
@@ -9735,7 +9802,9 @@ document.querySelector("#spatial-corner-radius").addEventListener("input",event=
 document.querySelector("#calibrate-spatial-controls").addEventListener("click",()=>{ensureSpatialControls().tracker.reset();clearSpatialInteraction();showToast("Spatial cursor re-centred · hold your dominant hand in the camera frame");});
 document.querySelector("#open-spatial-xr").addEventListener("click",async()=>{await syncSpatialXRCapability();spatialXRPreview.open(state.features,state.settings);});
 document.querySelector("#enter-spatial-xr").addEventListener("click",async()=>{try{await spatialXRPreview.enterXR();}catch(error){showToast(error.message);}});
-document.querySelector("#close-spatial-xr").addEventListener("click",()=>spatialXRPreview.close());
+document.querySelector("#minimize-spatial-xr").addEventListener("click",()=>{spatialXRPreview.close();minimizeSimpleWorkspace("spatial-xr-workspace","restore-spatial-xr-workspace");});
+document.querySelector("#restore-spatial-xr-workspace").addEventListener("click",()=>restoreSimpleWorkspace("spatial-xr-workspace","restore-spatial-xr-workspace",()=>spatialXRPreview.resize()));
+document.querySelector("#close-spatial-xr").addEventListener("click",()=>{spatialXRPreview.close();closeSimpleWorkspace("spatial-xr-workspace","restore-spatial-xr-workspace");});
 window.addEventListener("pagehide",()=>stopSpatialControls(false));
 document.querySelector("#toggle-tomography").addEventListener("click", () => {
   const editor = document.querySelector("#tomography-editor");
@@ -10817,6 +10886,7 @@ window.addEventListener("keydown", event => {
 
 bindPlacementShapePicker();
 document.querySelectorAll(".shape-editor, .map-editor").forEach(bindFloatingEditor);
+installFloatingEditorMinimizers();
 renderPalette();
 applyWorkspaceUI();
 updateViewportLabels();

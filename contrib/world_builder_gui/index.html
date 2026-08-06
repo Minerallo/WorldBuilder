@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Visual model builder for the Geodynamic World Builder">
   <title>GWB Visual Builder</title>
-  <link rel="stylesheet" href="styles.css?v=51">
+  <link rel="stylesheet" href="styles.css?v=52">
 </head>
 <body>
   <section id="welcome-screen" class="welcome-screen hidden" aria-labelledby="welcome-title">
@@ -1166,7 +1166,7 @@
   <dialog id="spatial-xr-workspace" class="spatial-xr-workspace">
     <header>
       <div><small>TRUE 3D · WEBGL · WEBXR</small><strong>Immersive model preview</strong><span id="spatial-xr-workspace-status">Preparing the model scene…</span></div>
-      <div><button id="enter-spatial-xr" class="primary">Enter VR</button><button id="close-spatial-xr" class="ghost">Close</button></div>
+      <div><button id="enter-spatial-xr" class="primary">Enter VR</button><button id="minimize-spatial-xr" class="ghost">Minimize —</button><button id="close-spatial-xr" class="ghost">Close</button></div>
     </header>
     <canvas id="spatial-xr-canvas" aria-label="True 3D WebXR model preview"></canvas>
     <footer><span>Desktop: drag to orbit · wheel to zoom</span><span>Headset: pinch one hand to move · pinch two hands to scale and rotate</span></footer>
@@ -1409,6 +1409,10 @@
       <span><strong>Statistics &amp; validation</strong><small>Analysis results preserved</small></span>
       <span class="workspace-dock-restore" aria-hidden="true">↗</span>
     </button>
+    <button id="restore-spatial-xr-workspace" class="workspace-dock-item" title="Reopen the immersive model preview" hidden>
+      <span class="workspace-dock-grip" aria-hidden="true"></span><span class="workspace-dock-icon" aria-hidden="true">XR</span>
+      <span><strong>Immersive preview</strong><small>3D scene preserved</small></span><span class="workspace-dock-restore" aria-hidden="true">↗</span>
+    </button>
   </div>
 
   <dialog id="examples-dialog" class="examples-dialog">
@@ -1480,6 +1484,6 @@
   </div>
 
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="app.js?v=93"></script>
+  <script type="module" src="app.js?v=94"></script>
 </body>
 </html>

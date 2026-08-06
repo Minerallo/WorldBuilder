@@ -119,6 +119,11 @@ editable plan, 3D, and section views. The experimental immersive workspace uses
 Three.js/WebGL as a separate renderer without changing the project model or
 generators in `core.js`.
 
+Every floating editor and scientific result workspace can be minimized without
+losing its controls or computed state. Minimized windows appear in the restore
+tray at the lower-right of the viewport, and their minimized state is preserved
+with the local project session.
+
 The tomography bridge requests public SubMachine depth-slice rasters through
 the local Node server. It validates the model and numeric bounds and retains
 the source result URL as metadata. Volumetric cubes and numeric cross-sections
