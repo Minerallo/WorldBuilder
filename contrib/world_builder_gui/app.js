@@ -182,7 +182,7 @@ const TUTORIALS = [
       { title: "Choose a feature", copy: "The feature library contains plates, subduction zones, faults, mantle layers, and plumes.", task: "Click any geological feature in the library to add it to the practice model.", target: "#feature-palette", prepare: "features", action:{event:"click",selector:".feature-card"} },
       { title: "Move or reshape it", copy: "The plan view is the main geometry editor. Feature vertices and outlines are directly editable.", task: "Drag the feature or one of its visible vertices, then release the pointer.", target: "#model-canvas", prepare: "plan", action:{event:"pointerup",selector:"#model-canvas"} },
       { title: "Define physical properties", copy: "The properties panel controls geometry, layers, temperature, composition, density, and feature-specific parameters.", task: "Change any numerical or selection field in the Properties panel.", target: ".inspector", prepare: "inspector", action:{event:"change",selector:".inspector input,.inspector select"} },
-      { title: "Export the model", copy: "Validation runs continuously and reports anything that must be fixed before export.", task: "Open Export and choose World Builder .wb.", target: ".compact-export-menu", prepare: "export", action:{event:"click",selector:"#download-wb"} }
+      { title: "Export the model", copy: "Validation runs continuously and reports anything that must be fixed before export.", task: "Open Export if needed, then choose World Builder .wb.", target: "#download-wb", prepare: "export", action:{event:"click",selector:"#download-wb",allowSelector:".compact-export-menu>summary,#download-wb"} }
     ]
   },
   {
@@ -6493,12 +6493,14 @@ function revealGuidedTutorialTarget(step) {
 function markGuidedTutorialTargets(step) {
   clearGuidedTutorialTargets();
   if (!step.action?.selector) return;
-  document.querySelectorAll(step.action.selector)
+  const allowedSelector = [step.action.selector,step.action.allowSelector].filter(Boolean).join(",");
+  document.querySelectorAll(allowedSelector)
     .forEach(element => element.classList.add("tutorial-interaction-allowed"));
 }
 
 function guidedTutorialTargetMatches(target) {
-  const selector = guidedTutorial?.steps[guidedTutorialStep]?.action?.selector;
+  const action = guidedTutorial?.steps[guidedTutorialStep]?.action;
+  const selector = [action?.selector,action?.allowSelector].filter(Boolean).join(",");
   return Boolean(selector && target?.closest?.(selector));
 }
 
@@ -10690,7 +10692,8 @@ document.querySelector("#guided-tour-finish").addEventListener("click", () => {
   if (IS_TUTORIAL_PRACTICE) closeTutorialPracticeWindow();
   else closeGuidedTutorial({ reopen:true });
 });
-["click","input","change","pointerup"].forEach(type => document.addEventListener(type,handleGuidedTutorialAction));
+["click","input","change","pointerup"].forEach(type =>
+  document.addEventListener(type,handleGuidedTutorialAction,{ capture:true }));
 ["pointerdown","click","dblclick","input","change"].forEach(type =>
   document.addEventListener(type,guardGuidedTutorialInteraction,{ capture:true }));
 document.querySelector("#exit-tutorial-practice").addEventListener("click", () => {
