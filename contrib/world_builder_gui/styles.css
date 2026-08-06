@@ -1140,6 +1140,10 @@ body[data-theme="light"] .brand-logo { filter: drop-shadow(0 3px 8px rgba(31,46,
 .guided-tour-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
 .guided-tour-actions button { min-width: 82px; }.guided-tour-actions button:disabled{cursor:not-allowed;opacity:.42}
 body.tutorial-active { overflow: hidden; }
+body.tutorial-restricted :is(button,input,select,textarea,summary,canvas,[role="button"]) { cursor: not-allowed; }
+body.tutorial-restricted :is(.tutorial-interaction-allowed,#guided-tour-card button,#exit-tutorial-practice),
+body.tutorial-restricted .tutorial-interaction-allowed * { cursor: pointer; }
+body.tutorial-restricted :is(input,textarea).tutorial-interaction-allowed { cursor: text; }
 
 @media (max-width: 1250px) {
   .workspace { grid-template-columns: 190px minmax(530px, 1fr) 300px; }

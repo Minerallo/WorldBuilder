@@ -5,3 +5,8 @@ export function advanceTutorialAction(action, eventType, targetMatches, currentC
   const count = currentCount + 1;
   return { matched:true, count, complete:count >= Math.max(1,Number(action.count || 1)) };
 }
+
+export function shouldBlockTutorialInteraction({ active, trusted, withinControls, targetMatches }) {
+  if (!active || !trusted || withinControls) return false;
+  return !targetMatches;
+}

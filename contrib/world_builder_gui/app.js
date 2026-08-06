@@ -16,7 +16,7 @@ import { pairedStatistics, moransI, pointPatternMisfit } from "./spatial-statist
 import { convertTomographyToTemperature, ASPECT_TOMOGRAPHY_DEFAULTS } from "./tomography-temperature.mjs";
 import { buildAspectAscii, buildAspectCompositionContours } from "./aspect-ascii.mjs";
 import { DEFAULT_RHEOLOGY, computeStrengthProfile, computeBdtGrid, parseEarthquakeGeoJson, compareSeismicityToBdt } from "./rheology.mjs";
-import { advanceTutorialAction } from "./tutorial-engine.mjs";
+import { advanceTutorialAction, shouldBlockTutorialInteraction } from "./tutorial-engine.mjs";
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
 const APP_QUERY = new URLSearchParams(window.location.search);
@@ -6388,6 +6388,53 @@ function prepareGuidedTutorialStep(step) {
   }
 }
 
+function clearGuidedTutorialTargets() {
+  document.querySelectorAll(".tutorial-interaction-allowed")
+    .forEach(element => element.classList.remove("tutorial-interaction-allowed"));
+}
+
+function revealGuidedTutorialTarget(step) {
+  const target = document.querySelector(step.target);
+  if (!target) return;
+  const disclosures = [];
+  let disclosure = target.matches("details") ? target : target.closest("details");
+  while (disclosure) {
+    disclosures.push(disclosure);
+    disclosure = disclosure.parentElement?.closest("details");
+  }
+  disclosures.reverse().forEach(element => { element.open = true; });
+}
+
+function markGuidedTutorialTargets(step) {
+  clearGuidedTutorialTargets();
+  if (!step.action?.selector) return;
+  document.querySelectorAll(step.action.selector)
+    .forEach(element => element.classList.add("tutorial-interaction-allowed"));
+}
+
+function guidedTutorialTargetMatches(target) {
+  const selector = guidedTutorial?.steps[guidedTutorialStep]?.action?.selector;
+  return Boolean(selector && target?.closest?.(selector));
+}
+
+function guardGuidedTutorialInteraction(event) {
+  if (!guidedTutorial) return;
+  const withinControls = Boolean(event.target?.closest?.("#guided-tour-card,#exit-tutorial-practice"));
+  const blocked = shouldBlockTutorialInteraction({
+    active:true,
+    trusted:event.isTrusted,
+    withinControls,
+    targetMatches:guidedTutorialTargetMatches(event.target)
+  });
+  if (!blocked) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const status = document.querySelector("#guided-tour-status");
+  if (status && !guidedStepComplete) {
+    status.lastChild.textContent = " Use the highlighted control, or choose Skip step";
+  }
+}
+
 function positionGuidedTutorial() {
   if (!guidedTutorial) return;
   const step = guidedTutorial.steps[guidedTutorialStep];
@@ -6435,6 +6482,8 @@ function renderGuidedTutorialStep() {
   guidedStepComplete = !step.action;
   guidedStepActionCount = 0;
   prepareGuidedTutorialStep(step);
+  revealGuidedTutorialTarget(step);
+  markGuidedTutorialTargets(step);
   document.querySelector("#guided-tour-progress").textContent =
     `${guidedTutorial.shortTitle} · step ${guidedTutorialStep + 1} of ${guidedTutorial.steps.length}`;
   document.querySelector("#guided-tour-title").textContent = step.title;
@@ -6516,6 +6565,7 @@ function startGuidedTutorial(tutorial = activeTutorial()) {
   tour.classList.remove("hidden");
   tour.setAttribute("aria-hidden", "false");
   document.body.classList.add("tutorial-active");
+  document.body.classList.add("tutorial-restricted");
   renderGuidedTutorialStep();
 }
 
@@ -6547,6 +6597,8 @@ function closeGuidedTutorial({ complete = false, reopen = false } = {}) {
   tour.setAttribute("aria-hidden", "true");
   if (tour.parentElement !== document.body) document.body.appendChild(tour);
   document.body.classList.remove("tutorial-active");
+  document.body.classList.remove("tutorial-restricted");
+  clearGuidedTutorialTargets();
   if (reopen && !IS_TUTORIAL_PRACTICE) openTutorialCenter(completedTutorial.id);
 }
 
@@ -10129,6 +10181,8 @@ document.querySelector("#guided-tour-previous").addEventListener("click", () => 
 document.querySelector("#guided-tour-skip").addEventListener("click", skipGuidedTutorialStep);
 document.querySelector("#guided-tour-next").addEventListener("click", advanceGuidedTutorial);
 ["click","input","change","pointerup"].forEach(type => document.addEventListener(type,handleGuidedTutorialAction));
+["pointerdown","click","dblclick","input","change"].forEach(type =>
+  document.addEventListener(type,guardGuidedTutorialInteraction,{ capture:true }));
 document.querySelector("#exit-tutorial-practice").addEventListener("click", () => {
   if (guidedTutorial) closeGuidedTutorial();
   window.close();
