@@ -2,7 +2,10 @@ let handLandmarker = null;
 
 async function initialize({ wasmRoot, modelUrl }) {
   const { FilesetResolver, HandLandmarker } = await import("/vendor/mediapipe/vision_bundle.mjs");
-  const vision = await FilesetResolver.forVisionTasks(wasmRoot);
+  // This file runs as an ES-module worker. MediaPipe's default fileset points
+  // at a classic loader that relies on `self.ModuleFactory`; module workers
+  // must explicitly select the ESM loader instead.
+  const vision = await FilesetResolver.forVisionTasks(wasmRoot,true);
   handLandmarker = await HandLandmarker.createFromOptions(vision, {
     baseOptions: { modelAssetPath:modelUrl },
     runningMode:"VIDEO",

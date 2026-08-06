@@ -29,7 +29,7 @@ export class SpatialControls {
     });
     this.video.srcObject=this.stream;
     await this.video.play();
-    this.worker=new Worker(new URL("./spatial-hand-worker.mjs",import.meta.url),{type:"module"});
+    this.worker=new Worker(new URL("./spatial-hand-worker.mjs?v=2",import.meta.url),{type:"module"});
     this.worker.onmessage=event=>this.handleWorkerMessage(event.data);
     this.worker.onerror=event=>this.fail(event.message || "Hand-tracking worker failed.");
     this.worker.postMessage({
