@@ -72,11 +72,43 @@ The prototype supports:
 - An advanced per-feature JSON editor for parameters not yet represented by a
   dedicated graphical control.
 - Live `.wb` JSON and `.grid` generation, import, export, and local autosave.
+- Experimental local spatial controls: webcam hand tracking for camera navigation,
+  feature/vertex/depth-handle editing, and interface activation; plus an optional
+  true 3D WebGL preview with an immersive WebXR entry point on supported devices.
 
-The implementation deliberately uses browser-native Canvas for the current
-editable plan view and lightweight 3D/section previews. A Three.js/WebGL
-renderer can replace the 3D drawing layer later without changing the project
-model or generators in `core.js`.
+## Experimental spatial controls
+
+Open **Workspaces → Utilities → Spatial Controls**. Camera processing runs in a
+dedicated browser worker using the bundled MediaPipe hand-landmark model. Video
+frames are not uploaded or saved. The preview can be mirrored independently of
+the model coordinates, and tracking can be stopped at any time to release the
+camera.
+
+- Move one open hand to pan; pinch while moving to orbit.
+- Pinch a visible feature, vertex, dip handle, thickness handle, or internal
+  boundary to edit it directly. Releasing the pinch commits one undoable edit.
+- Pinch with two hands to zoom, rotate, and pan the current model view.
+- Interface mode exposes a dwell cursor for large buttons and movable tool
+  windows. Geometry mode leaves the rest of the interface untouched.
+- Calibrate neutral position after changing camera placement. Adjustable
+  smoothing, pinch sensitivity, and motion gain are stored locally.
+
+The **Open XR model preview** button creates a separate Three.js/WebGL scene so
+experimental immersive interaction cannot alter the trusted Canvas editor.
+Desktop users can drag to orbit and use the wheel to zoom. On a WebXR headset,
+one tracked-hand pinch moves the model and two pinches scale and rotate it.
+Immersive VR and webcam access require a secure context in production (HTTPS;
+localhost is accepted for development), browser permission, and compatible
+hardware. Keyboard, mouse, and touch interaction remain available throughout.
+
+The hand tracker is pinned in `package-lock.json`; its model provenance and
+checksum are recorded in `assets/models/README.md`. The World Builder WebAssembly
+runtime and hand tracker use separate workers and can run on the same page.
+
+The implementation deliberately retains browser-native Canvas for the current
+editable plan, 3D, and section views. The experimental immersive workspace uses
+Three.js/WebGL as a separate renderer without changing the project model or
+generators in `core.js`.
 
 The tomography bridge requests public SubMachine depth-slice rasters through
 the local Node server. It validates the model and numeric bounds and retains

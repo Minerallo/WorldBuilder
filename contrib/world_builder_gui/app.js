@@ -17,6 +17,8 @@ import { convertTomographyToTemperature, ASPECT_TOMOGRAPHY_DEFAULTS } from "./to
 import { buildAspectAscii, buildAspectCompositionContours } from "./aspect-ascii.mjs";
 import { DEFAULT_RHEOLOGY, computeStrengthProfile, computeBdtGrid, parseEarthquakeGeoJson, compareSeismicityToBdt } from "./rheology.mjs";
 import { advanceTutorialAction, shouldBlockTutorialInteraction } from "./tutorial-engine.mjs";
+import { SpatialControls } from "./spatial-controls.mjs";
+import { SpatialXRPreview } from "./spatial-xr.mjs";
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
 const APP_QUERY = new URLSearchParams(window.location.search);
@@ -157,6 +159,11 @@ let rheologyResult = null;
 let statisticsResult = null;
 const TUTORIAL_PROGRESS_KEY = "gwb-visual-builder-tutorial-progress-v1";
 const WELCOME_PREFERENCE_KEY = "gwb-visual-builder-show-welcome-v1";
+const SPATIAL_SETTINGS_KEY = "gwb-visual-builder-spatial-settings-v1";
+const DEFAULT_SPATIAL_SETTINGS = {
+  mode:"navigation",dominantHand:"Right",mirror:true,showSkeleton:true,
+  smoothing:.68,pinchThreshold:.34,releaseThreshold:.46,gain:1,deviceId:""
+};
 const TUTORIALS = [
   {
     id: "getting-started", eyebrow: "GETTING STARTED", title: "Build your first model", shortTitle: "First model",
@@ -344,6 +351,13 @@ let guidedTutorial = null;
 let guidedTutorialStep = 0;
 let guidedStepComplete = false;
 let guidedStepActionCount = 0;
+let spatialControls = null;
+let spatialXRPreview = null;
+let spatialSettings = loadSpatialSettings();
+let spatialModelGrab = null;
+let spatialWindowGrab = null;
+let spatialCameraGrab = null;
+let spatialHoveredElement = null;
 let activitySequence = 0;
 let activityHideTimer = null;
 let activeViewport = "primary";
@@ -6602,6 +6616,220 @@ function closeGuidedTutorial({ complete = false, reopen = false } = {}) {
   if (reopen && !IS_TUTORIAL_PRACTICE) openTutorialCenter(completedTutorial.id);
 }
 
+function loadSpatialSettings() {
+  try {
+    return { ...DEFAULT_SPATIAL_SETTINGS, ...JSON.parse(localStorage.getItem(SPATIAL_SETTINGS_KEY) || "{}") };
+  } catch { return { ...DEFAULT_SPATIAL_SETTINGS }; }
+}
+
+function saveSpatialSettings() {
+  localStorage.setItem(SPATIAL_SETTINGS_KEY,JSON.stringify(spatialSettings));
+}
+
+function setSpatialStatus(message,status="idle") {
+  const holder=document.querySelector("#spatial-status");
+  if (!holder) return;
+  holder.dataset.state=status;
+  holder.querySelector("strong").textContent=message;
+}
+
+function configureSpatialControls() {
+  spatialControls?.configure({
+    smoothing:spatialSettings.smoothing,pinchThreshold:spatialSettings.pinchThreshold,
+    releaseThreshold:Math.min(.68,spatialSettings.pinchThreshold+.12),mirror:spatialSettings.mirror,
+    dominantHand:spatialSettings.dominantHand,showSkeleton:spatialSettings.showSkeleton
+  });
+}
+
+function syncSpatialControlsUI() {
+  const values={
+    "spatial-mode":spatialSettings.mode,"spatial-dominant-hand":spatialSettings.dominantHand,
+    "spatial-smoothing":Math.round(spatialSettings.smoothing*100),"spatial-pinch":Math.round(spatialSettings.pinchThreshold*100),
+    "spatial-gain":Math.round(spatialSettings.gain*100),"spatial-camera-device":spatialSettings.deviceId||""
+  };
+  Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(input&&document.activeElement!==input)input.value=value;});
+  document.querySelector("#spatial-mirror").checked=spatialSettings.mirror!==false;
+  document.querySelector("#spatial-show-skeleton").checked=spatialSettings.showSkeleton!==false;
+  const mirrorTransform=spatialSettings.mirror===false?"none":"scaleX(-1)";
+  document.querySelector("#spatial-video").style.transform=mirrorTransform;
+  document.querySelector("#spatial-video-overlay").style.transform=mirrorTransform;
+  document.querySelector("#spatial-smoothing-value").textContent=`${Math.round(spatialSettings.smoothing*100)}%`;
+  document.querySelector("#spatial-pinch-value").textContent=`${Math.round(spatialSettings.pinchThreshold*100)}%`;
+  document.querySelector("#spatial-gain-value").textContent=`${Math.round(spatialSettings.gain*100)}%`;
+  const notes={navigation:"Rotate, pan and zoom without modifying model geometry.",geometry:"Pinch features, vertices, thickness and sublayer handles. Interface controls remain locked.",interface:"Activate buttons and move floating windows without changing model geometry.",full:"Geometry, navigation and interface controls are all available."};
+  document.querySelector("#spatial-mode-note").textContent=notes[spatialSettings.mode];
+  document.body.classList.toggle("spatial-navigation-only",spatialSettings.mode==="navigation");
+  configureSpatialControls();
+}
+
+function ensureSpatialControls() {
+  if (!spatialControls) spatialControls=new SpatialControls({
+    video:document.querySelector("#spatial-video"),overlay:document.querySelector("#spatial-video-overlay"),
+    onFrame:handleSpatialFrame,onStatus:setSpatialStatus
+  });
+  configureSpatialControls();
+  return spatialControls;
+}
+
+async function refreshSpatialCameras() {
+  const cameras=await ensureSpatialControls().cameras();
+  const select=document.querySelector("#spatial-camera-device");
+  const selected=spatialSettings.deviceId;
+  select.innerHTML=`<option value="">Default camera</option>${cameras.map((camera,index)=>`<option value="${escapeHtml(camera.deviceId)}">${escapeHtml(camera.label||`Camera ${index+1}`)}</option>`).join("")}`;
+  select.value=cameras.some(camera=>camera.deviceId===selected)?selected:"";
+}
+
+async function startSpatialControls() {
+  try {
+    configureSpatialControls();
+    await ensureSpatialControls().start(spatialSettings.deviceId);
+    document.body.classList.add("spatial-active");
+    document.querySelector("#spatial-camera-stage").classList.add("active");
+    document.querySelector("#start-spatial-controls").disabled=true;
+    document.querySelector("#stop-spatial-controls").disabled=false;
+    await refreshSpatialCameras();
+  } catch (error) {
+    setSpatialStatus(error.message||"Could not start camera tracking.","error");
+    stopSpatialControls(false);
+  }
+}
+
+function clearSpatialInteraction() {
+  spatialModelGrab=null;spatialWindowGrab=null;spatialCameraGrab=null;
+  if(spatialHoveredElement)spatialHoveredElement.classList.remove("spatial-hover");
+  spatialHoveredElement=null;
+  document.querySelector("#spatial-pointer").classList.add("hidden");
+}
+
+function stopSpatialControls(report=true) {
+  spatialControls?.stop(report);clearSpatialInteraction();
+  document.body.classList.remove("spatial-active","spatial-navigation-only");
+  document.querySelector("#spatial-camera-stage").classList.remove("active");
+  document.querySelector("#start-spatial-controls").disabled=false;
+  document.querySelector("#stop-spatial-controls").disabled=true;
+}
+
+function setSpatialHoveredElement(element) {
+  const interactive=element?.closest?.("button,summary,label,input,select,.shape-editor-header,canvas")||null;
+  if(interactive===spatialHoveredElement)return;
+  spatialHoveredElement?.classList.remove("spatial-hover");
+  spatialHoveredElement=interactive;
+  spatialHoveredElement?.classList.add("spatial-hover");
+}
+
+function spatialCanvasPoint(target,pointer) {
+  const viewportName=target===secondaryCanvas?"secondary":"primary";
+  if(activeViewport!==viewportName)setActiveViewport(viewportName);
+  const rect=target.getBoundingClientRect();
+  return screenPointToCanvas(pointer.x-rect.left,pointer.y-rect.top);
+}
+
+function beginSpatialModelGrab(pointer,target) {
+  if(target!==primaryCanvas||viewMode!=="plan")return false;
+  const point=spatialCanvasPoint(target,pointer);
+  const selectedFeature=state.features.find(item=>item.id===selectedId);
+  const dipHit=selectedFeature?.dipPoint&&Math.hypot(...worldToCanvas(selectedFeature.dipPoint).map((value,index)=>value-point[index]))<=16;
+  const plumeResizeHit=hitPlumeContour(selectedFeature,point);
+  const layerBoundaryHit=hitLayerBoundaryHandle(selectedFeature,point);
+  const thicknessHit=hitThicknessHandle(selectedFeature,point);
+  const feature=dipHit||plumeResizeHit||layerBoundaryHit||thicknessHit?selectedFeature:hitFeature(point);
+  if(!feature)return false;
+  selectFeature(feature.id,false,selectedIds.has(feature.id));
+  const handleIndex=feature.points.findIndex(projected=>{const handle=worldToCanvas(projected);return Math.hypot(handle[0]-point[0],handle[1]-point[1])<=15;});
+  spatialModelGrab={
+    id:feature.id,canvas:target,mode:dipHit?"dip":plumeResizeHit?"plume-resize":layerBoundaryHit?"layer-boundary":thicknessHit?"thickness":handleIndex>=0?"point":"feature",
+    handleIndex,layerBoundaryIndex:layerBoundaryHit?.index??null,start:canvasToWorld(...point),startCanvas:[...point],
+    original:feature.points.map(value=>[...value]),originalDip:feature.dipPoint?[...feature.dipPoint]:null,
+    originalRadius:Number(feature.semiMajorAxis),originalThickness:featureThickness(feature),originalLayers:structuredClone(feature.layers||[])
+  };
+  showToast(`${feature.name||feature.model} attached to spatial pointer`);
+  return true;
+}
+
+function moveSpatialModelGrab(pointer) {
+  const grab=spatialModelGrab;if(!grab)return;
+  const feature=state.features.find(item=>item.id===grab.id);if(!feature)return;
+  const point=spatialCanvasPoint(grab.canvas,pointer),world=canvasToWorld(...point),dx=world[0]-grab.start[0],dy=world[1]-grab.start[1];
+  if(grab.mode==="point"){feature.points=grab.original.map((value,index)=>index===grab.handleIndex?[world[0],world[1]]:value);feature.geometryEdited=true;}
+  else if(grab.mode==="dip"){feature.dipPoint=[world[0],world[1]];feature.dipPointDerivedFromGplates=false;feature.geometryEdited=true;}
+  else if(grab.mode==="plume-resize"){const center=grab.original[0],ecc=Math.max(0,Math.min(.98,Number(feature.eccentricity)||0)),ratio=Math.sqrt(1-ecc*ecc);feature.semiMajorAxis=Math.max(state.settings.coordinateSystem==="spherical"?.05:1000,Math.hypot(world[0]-center[0],(world[1]-center[1])/ratio));feature.plumeGeometryEdited=true;}
+  else if(grab.mode==="thickness"){const range=Math.max(1000,state.settings.zMax-state.settings.zMin),perPixel=range/Math.max(1,grab.canvas.clientHeight-84),thickness=Math.max(1000,grab.originalThickness-(point[1]-grab.startCanvas[1])*perPixel);if(feature.model==="subducting plate"||feature.model==="fault")feature.thickness=thickness;else feature.maxDepth=Number(feature.minDepth)+thickness;if(grab.originalLayers.length)feature.layers=grab.originalLayers.map(layer=>({...layer,minDepth:Number(feature.minDepth||0)+(Number(layer.minDepth)-Number(feature.minDepth||0))/Math.max(1,grab.originalThickness)*thickness,maxDepth:Number(feature.minDepth||0)+(Number(layer.maxDepth)-Number(feature.minDepth||0))/Math.max(1,grab.originalThickness)*thickness}));}
+  else if(grab.mode==="layer-boundary"){const geometry=layerBoundaryGeometry(feature).find(handle=>handle.index===grab.layerBoundaryIndex),upper=feature.layers[grab.layerBoundaryIndex],lower=feature.layers[grab.layerBoundaryIndex+1];if(geometry&&upper&&lower){const fraction=Math.max(0,Math.min(1,(point[1]-geometry.top)/Math.max(1,geometry.bottom-geometry.top))),candidate=geometry.startDepth+fraction*geometry.thickness,boundary=Math.max(upper.minDepth+1000,Math.min(lower.maxDepth-1000,candidate));upper.maxDepth=boundary;lower.minDepth=boundary;feature.layersEdited=true;}}
+  else{feature.points=grab.original.map(([x,y])=>[x+dx,y+dy]);if(grab.originalDip)feature.dipPoint=[grab.originalDip[0]+dx,grab.originalDip[1]+dy];feature.geometryEdited=true;}
+  draw();
+}
+
+function finishSpatialModelGrab() {
+  if(!spatialModelGrab)return;
+  const mode=spatialModelGrab.mode;spatialModelGrab=null;updateAll();renderInspector();showToast(`Spatial ${mode.replaceAll("-"," ")} edit committed · Undo is available`);
+}
+
+function beginSpatialWindowGrab(pointer,header) {
+  const editor=header.closest(".shape-editor,.map-editor");if(!editor)return false;
+  const rect=editor.getBoundingClientRect();floatingEditorZ+=1;editor.style.zIndex=String(floatingEditorZ);
+  spatialWindowGrab={editor,offsetX:pointer.x-rect.left,offsetY:pointer.y-rect.top};return true;
+}
+
+function moveSpatialWindowGrab(pointer) {
+  if(!spatialWindowGrab)return;const {editor}=spatialWindowGrab,wrapRect=wrap.getBoundingClientRect(),maxX=Math.max(8,wrap.clientWidth-editor.offsetWidth-8),maxY=Math.max(8,wrap.clientHeight-editor.offsetHeight-8),left=Math.max(8,Math.min(maxX,pointer.x-wrapRect.left-spatialWindowGrab.offsetX)),top=Math.max(8,Math.min(maxY,pointer.y-wrapRect.top-spatialWindowGrab.offsetY));
+  editor.style.left=`${left}px`;editor.style.top=`${top}px`;editor.style.right="auto";state.ui.floatingEditors||={};state.ui.floatingEditors[editor.id]={x:left/maxX,y:top/maxY};
+}
+
+function activateSpatialInterfaceTarget(target) {
+  const actionable=target?.closest?.("button,summary,label");
+  if(!actionable||actionable.disabled)return false;
+  actionable.click();return true;
+}
+
+function beginSpatialCameraGrab(pointer,target) {
+  if(target!==primaryCanvas&&target!==secondaryCanvas)return false;
+  spatialCanvasPoint(target,pointer);spatialCameraGrab={pointer:{...pointer},mode:viewMode==="three-d"?"orbit":"pan"};return true;
+}
+
+function moveSpatialCameraGrab(pointer) {
+  if(!spatialCameraGrab)return;const gain=Number(spatialSettings.gain)||1,dx=(pointer.x-spatialCameraGrab.pointer.x)*gain,dy=(pointer.y-spatialCameraGrab.pointer.y)*gain;spatialCameraGrab.pointer={...pointer};
+  if(spatialCameraGrab.mode==="orbit")changeCamera({orbitYawDelta:dx*.45,orbitPitchDelta:-dy*.35});else changeCamera({panX:dx,panY:dy});
+}
+
+function handleSpatialFrame(frame) {
+  const pointerElement=document.querySelector("#spatial-pointer"),primary=frame.primary;
+  if(!primary){
+    pointerElement.classList.add("hidden");setSpatialHoveredElement(null);
+    if(spatialModelGrab)finishSpatialModelGrab();
+    if(spatialWindowGrab){spatialWindowGrab=null;persist();}
+    spatialCameraGrab=null;
+    return;
+  }
+  const pointer=primary.pointer;pointerElement.classList.remove("hidden");pointerElement.classList.toggle("pinching",primary.pinching);pointerElement.classList.toggle("two-hand",frame.twoHand);pointerElement.style.left=`${pointer.x}px`;pointerElement.style.top=`${pointer.y}px`;pointerElement.querySelector("small").textContent=frame.twoHand?"TRANSFORM":primary.pinching?"GRAB":"POINT";
+  const target=document.elementFromPoint(pointer.x,pointer.y);setSpatialHoveredElement(target);
+  if(frame.twoHand){
+    if(spatialModelGrab)finishSpatialModelGrab();
+    if(spatialWindowGrab){spatialWindowGrab=null;persist();}
+    spatialCameraGrab=null;
+    if(frame.transform){const gain=Number(spatialSettings.gain)||1,scale=Math.max(.93,Math.min(1.07,1+(frame.transform.scale-1)*gain));changeCamera({zoomFactor:scale,orbitYawDelta:frame.transform.rotation*gain,panX:frame.transform.panX*.28*gain,panY:frame.transform.panY*.28*gain});}
+    return;
+  }
+  if(spatialModelGrab)moveSpatialModelGrab(pointer);
+  else if(spatialWindowGrab)moveSpatialWindowGrab(pointer);
+  else if(spatialCameraGrab)moveSpatialCameraGrab(pointer);
+  if(primary.pinchEnd){finishSpatialModelGrab();if(spatialWindowGrab){spatialWindowGrab=null;persist();showToast("Window position saved");}if(spatialCameraGrab){spatialCameraGrab=null;persist();}return;}
+  if(!primary.pinchStart)return;
+  const mode=spatialSettings.mode,header=target?.closest?.(".shape-editor-header");
+  if((mode==="interface"||mode==="full")&&header&&beginSpatialWindowGrab(pointer,header))return;
+  const targetCanvas=target?.closest?.("canvas");
+  if((mode==="geometry"||mode==="full")&&targetCanvas&&beginSpatialModelGrab(pointer,targetCanvas))return;
+  if((mode==="interface"||mode==="full"||target?.closest?.("#spatial-editor"))&&activateSpatialInterfaceTarget(target))return;
+  beginSpatialCameraGrab(pointer,targetCanvas);
+}
+
+async function syncSpatialXRCapability() {
+  if(!spatialXRPreview)spatialXRPreview=new SpatialXRPreview({dialog:document.querySelector("#spatial-xr-workspace"),canvas:document.querySelector("#spatial-xr-canvas"),status:document.querySelector("#spatial-xr-workspace-status"),enterButton:document.querySelector("#enter-spatial-xr")});
+  const supported=await spatialXRPreview.capability();
+  document.querySelector("#spatial-xr-status").textContent=supported?"Immersive VR is available. The preview also works as a true 3D desktop scene.":"True 3D desktop preview is available; this browser/device does not currently expose immersive VR.";
+  document.querySelector("#open-spatial-xr").disabled=false;
+  document.querySelector("#enter-spatial-xr").disabled=!supported;
+}
+
 async function loadExampleCatalog() {
   try {
     const response = await fetchWithProgress("./examples/catalog.json", {}, "Loading GWB example library");
@@ -9364,6 +9592,30 @@ document.querySelector("#close-map-editor").addEventListener("click", () => {
   document.querySelector("#map-editor").classList.add("hidden");
   document.querySelector("#toggle-map-editor").setAttribute("aria-expanded", "false");
 });
+document.querySelector("#toggle-spatial-controls").addEventListener("click", () => {
+  const editor=document.querySelector("#spatial-editor"),willOpen=editor.classList.contains("hidden");
+  editor.classList.toggle("hidden",!willOpen);document.querySelector("#toggle-spatial-controls").setAttribute("aria-expanded",String(willOpen));
+  document.querySelector("#workspace-launcher").open=false;
+  if(willOpen){syncSpatialControlsUI();refreshSpatialCameras().catch(()=>{});syncSpatialXRCapability().catch(error=>setSpatialStatus(error.message,"error"));}
+});
+document.querySelector("#close-spatial-controls").addEventListener("click",()=>{
+  document.querySelector("#spatial-editor").classList.add("hidden");document.querySelector("#toggle-spatial-controls").setAttribute("aria-expanded","false");
+});
+document.querySelector("#start-spatial-controls").addEventListener("click",startSpatialControls);
+document.querySelector("#stop-spatial-controls").addEventListener("click",()=>stopSpatialControls());
+document.querySelector("#spatial-mode").addEventListener("change",event=>{spatialSettings.mode=event.target.value;saveSpatialSettings();syncSpatialControlsUI();showToast(`${event.target.selectedOptions[0].textContent} enabled`);});
+document.querySelector("#spatial-dominant-hand").addEventListener("change",event=>{spatialSettings.dominantHand=event.target.value;saveSpatialSettings();configureSpatialControls();});
+document.querySelector("#spatial-camera-device").addEventListener("change",event=>{spatialSettings.deviceId=event.target.value;saveSpatialSettings();if(spatialControls?.running)startSpatialControls();});
+document.querySelector("#spatial-mirror").addEventListener("change",event=>{spatialSettings.mirror=event.target.checked;saveSpatialSettings();configureSpatialControls();document.querySelector("#spatial-video").style.transform=event.target.checked?"scaleX(-1)":"none";document.querySelector("#spatial-video-overlay").style.transform=event.target.checked?"scaleX(-1)":"none";});
+document.querySelector("#spatial-show-skeleton").addEventListener("change",event=>{spatialSettings.showSkeleton=event.target.checked;saveSpatialSettings();configureSpatialControls();});
+document.querySelector("#spatial-smoothing").addEventListener("input",event=>{spatialSettings.smoothing=Number(event.target.value)/100;document.querySelector("#spatial-smoothing-value").textContent=`${event.target.value}%`;saveSpatialSettings();configureSpatialControls();});
+document.querySelector("#spatial-pinch").addEventListener("input",event=>{spatialSettings.pinchThreshold=Number(event.target.value)/100;document.querySelector("#spatial-pinch-value").textContent=`${event.target.value}%`;saveSpatialSettings();configureSpatialControls();});
+document.querySelector("#spatial-gain").addEventListener("input",event=>{spatialSettings.gain=Number(event.target.value)/100;document.querySelector("#spatial-gain-value").textContent=`${event.target.value}%`;saveSpatialSettings();});
+document.querySelector("#calibrate-spatial-controls").addEventListener("click",()=>{ensureSpatialControls().tracker.reset();clearSpatialInteraction();showToast("Spatial cursor re-centred · hold your dominant hand in the camera frame");});
+document.querySelector("#open-spatial-xr").addEventListener("click",async()=>{await syncSpatialXRCapability();spatialXRPreview.open(state.features,state.settings);});
+document.querySelector("#enter-spatial-xr").addEventListener("click",async()=>{try{await spatialXRPreview.enterXR();}catch(error){showToast(error.message);}});
+document.querySelector("#close-spatial-xr").addEventListener("click",()=>spatialXRPreview.close());
+window.addEventListener("pagehide",()=>stopSpatialControls(false));
 document.querySelector("#toggle-tomography").addEventListener("click", () => {
   const editor = document.querySelector("#tomography-editor");
   const willOpen = editor.classList.contains("hidden");
@@ -10280,6 +10532,7 @@ function closeFloatingEditors() {
     ["thermal-conduction-editor", "toggle-thermal-conduction"],
     ["computation-editor", "toggle-computation"],
     ["field-calculator", "toggle-field-calculator"],
+    ["spatial-editor", "toggle-spatial-controls"],
     ["appearance-editor", "toggle-appearance"],
     ["color-editor", "toggle-color-editor"]
   ].forEach(([editorId, toggleId]) => {
@@ -10461,6 +10714,7 @@ syncLithosphereUI();
 renderPlanetaryCatalog();
 syncWorkspaceDock();
 syncSectionActions();
+syncSpatialControlsUI();
 updateTopographyUI();
 updatePaleoUI();
 renderLayersPanel();

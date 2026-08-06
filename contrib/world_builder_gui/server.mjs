@@ -10,6 +10,7 @@ const worldBuilderRoot = fileURLToPath(new URL("../../", import.meta.url));
 const logoSource = fileURLToPath(new URL("./assets/gwb-logo.png", import.meta.url));
 const gplatesDataRoot = fileURLToPath(new URL("../gplates/data/", import.meta.url));
 const port = Number(process.env.PORT || 4173);
+const host = process.env.HOST || "127.0.0.1";
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -20,6 +21,10 @@ const mime = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg"
+};
+const vendorRoots = {
+  "/vendor/mediapipe/": join(root, "node_modules/@mediapipe/tasks-vision/"),
+  "/vendor/three/": join(root, "node_modules/three/")
 };
 const gplatesModels = {
   MULLER2022: [0, 1000], ZAHIROVIC2022: [0, 410], MERDITH2021: [0, 1000],
@@ -127,6 +132,27 @@ async function findTomographyDataDirectory() {
 createServer(async (request, response) => {
   const requestUrl = new URL(request.url, "http://localhost");
   const pathname = decodeURIComponent(requestUrl.pathname);
+  const vendorPrefix = Object.keys(vendorRoots).find(prefix => pathname.startsWith(prefix));
+  if (vendorPrefix) {
+    const vendorRoot = vendorRoots[vendorPrefix];
+    const target = normalize(join(vendorRoot, pathname.slice(vendorPrefix.length)));
+    if (!target.startsWith(vendorRoot)) {
+      response.writeHead(403).end("Forbidden");
+      return;
+    }
+    try {
+      const body = await readFile(target);
+      response.writeHead(200, {
+        "Content-Type": mime[extname(target)] || "application/octet-stream",
+        "Content-Length": body.length,
+        "Cache-Control": "public, max-age=86400"
+      });
+      response.end(body);
+    } catch {
+      response.writeHead(404).end("Vendor asset not found");
+    }
+    return;
+  }
   if (pathname === "/api/version") {
     try {
       const version = String(await readFile(join(worldBuilderRoot, "VERSION"), "utf8")).trim();
@@ -385,6 +411,6 @@ createServer(async (request, response) => {
   } catch {
     response.writeHead(404).end("Not found");
   }
-}).listen(port, "127.0.0.1", () => {
-  console.log(`GWB Visual Builder: http://127.0.0.1:${port}`);
+}).listen(port, host, () => {
+  console.log(`GWB Visual Builder: http://${host}:${port}`);
 });

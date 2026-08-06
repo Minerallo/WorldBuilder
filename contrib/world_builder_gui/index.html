@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Visual model builder for the Geodynamic World Builder">
   <title>GWB Visual Builder</title>
-  <link rel="stylesheet" href="styles.css?v=49">
+  <link rel="stylesheet" href="styles.css?v=50">
 </head>
 <body>
   <section id="welcome-screen" class="welcome-screen hidden" aria-labelledby="welcome-title">
@@ -385,6 +385,7 @@
               <div class="workspace-launcher-grid">
                 <button id="toggle-field-calculator" class="workspace-card experimental-workflow calculator-button" aria-expanded="false" data-workspace-search="field calculator gradient plus minus layers"><span class="workspace-card-icon">ƒ</span><span><strong>Field calculator</strong><small>Combine and derive numerical fields</small></span></button>
                 <button id="toggle-research" class="workspace-card experimental-workflow research-button" aria-expanded="false" data-workspace-search="research search manual examples functions"><span class="workspace-card-icon">?</span><span><strong>Research functions</strong><small>Search tools, examples and the manual</small></span></button>
+                <button id="toggle-spatial-controls" class="workspace-card experimental-workflow spatial-button" aria-expanded="false" data-workspace-search="spatial camera hands gestures vr xr interaction accessibility"><span class="workspace-card-icon">✋</span><span><strong>Spatial controls</strong><small>Build and navigate with tracked hands</small></span></button>
               </div>
             </section>
             <footer><span>Tip: press <kbd>W</kbd> anywhere to open this launcher.</span><a href="https://gwb.readthedocs.io/" target="_blank" rel="noreferrer">GWB manual ↗</a></footer>
@@ -424,6 +425,7 @@
         </div>
       </div>
       <div id="canvas-wrap" class="canvas-wrap">
+        <div id="spatial-pointer" class="spatial-pointer hidden" aria-hidden="true"><span></span><small>POINT</small></div>
         <div class="viewport-grid">
           <div id="primary-viewport" class="viewport-pane active" data-viewport="primary">
             <canvas id="model-canvas" tabindex="0" aria-label="Primary geodynamic model viewport"></canvas>
@@ -527,6 +529,55 @@
             </div>
             <p class="shape-help">Preserve aspect avoids deforming maps. Choose Stretch only when the raster must match the complete model domain. Bounds georeference the image; in spherical mode they are longitude and latitude in degrees.</p>
           </div>
+        </aside>
+        <aside id="spatial-editor" class="map-editor spatial-editor hidden" aria-label="Spatial controls">
+          <div class="shape-editor-header">
+            <div><small>CAMERA · HANDS · WEBXR</small><strong>Spatial controls</strong></div>
+            <button id="close-spatial-controls" class="ghost" aria-label="Close spatial controls">×</button>
+          </div>
+          <p class="spatial-intro">Use a local camera model to point, pinch, manipulate geometry and control the model view. Camera frames stay in this browser and are never saved or uploaded.</p>
+          <div id="spatial-camera-stage" class="spatial-camera-stage">
+            <video id="spatial-video" playsinline muted></video>
+            <canvas id="spatial-video-overlay" aria-hidden="true"></canvas>
+            <div id="spatial-camera-placeholder"><span>✋</span><strong>Camera off</strong><small>Start Spatial mode when ready</small></div>
+          </div>
+          <div id="spatial-status" class="spatial-status" data-state="idle"><span></span><strong>Camera stopped · no frames retained</strong></div>
+          <div class="spatial-primary-actions">
+            <button id="start-spatial-controls" class="primary">Start Spatial mode</button>
+            <button id="stop-spatial-controls" class="ghost" disabled>Stop</button>
+          </div>
+          <label>Camera<select id="spatial-camera-device"><option value="">Default camera</option></select></label>
+          <label>Interaction mode
+            <select id="spatial-mode">
+              <option value="navigation">Navigation only · safest</option>
+              <option value="geometry">Geometry editing</option>
+              <option value="interface">Interface and windows</option>
+              <option value="full">Full spatial interaction</option>
+            </select>
+          </label>
+          <div class="spatial-mode-note" id="spatial-mode-note">Rotate, pan and zoom without modifying model geometry.</div>
+          <details class="spatial-settings">
+            <summary>Tracking and calibration</summary>
+            <label>Dominant hand<select id="spatial-dominant-hand"><option value="Right">Right</option><option value="Left">Left</option></select></label>
+            <label class="checkbox-row"><input id="spatial-mirror" type="checkbox" checked> Mirror camera movement</label>
+            <label class="checkbox-row"><input id="spatial-show-skeleton" type="checkbox" checked> Show hand skeleton</label>
+            <label>Motion smoothing <output id="spatial-smoothing-value">68%</output><input id="spatial-smoothing" type="range" min="0" max="92" value="68"></label>
+            <label>Pinch sensitivity <output id="spatial-pinch-value">34%</output><input id="spatial-pinch" type="range" min="18" max="55" value="34"></label>
+            <label>Navigation gain <output id="spatial-gain-value">100%</output><input id="spatial-gain" type="range" min="30" max="220" value="100"></label>
+            <button id="calibrate-spatial-controls" class="wide ghost">Re-centre interaction area</button>
+          </details>
+          <details class="spatial-gesture-guide" open>
+            <summary>Gesture guide</summary>
+            <div><span>☝</span><p><strong>Point</strong><small>Move the spatial cursor</small></p></div>
+            <div><span>👌</span><p><strong>Pinch</strong><small>Select, activate, grab or release</small></p></div>
+            <div><span>↔</span><p><strong>Two pinches</strong><small>Zoom, rotate and pan the active view</small></p></div>
+          </details>
+          <section class="spatial-xr-card">
+            <div><small>IMMERSIVE EXTENSION</small><strong>WebXR headset</strong></div>
+            <p id="spatial-xr-status">Checking this browser for immersive VR and tracked-hand support…</p>
+            <button id="open-spatial-xr" class="wide ghost" disabled>Open XR model preview</button>
+          </section>
+          <p class="shape-help">Keep Undo available and begin in Navigation only. Geometry mode uses deliberate pinch/release gestures; deleting still requires the normal interface.</p>
         </aside>
         <aside id="tomography-editor" class="map-editor tomography-editor hidden" aria-label="Tomography explorer">
           <div class="shape-editor-header">
@@ -1105,6 +1156,15 @@
     </aside>
   </main>
 
+  <dialog id="spatial-xr-workspace" class="spatial-xr-workspace">
+    <header>
+      <div><small>TRUE 3D · WEBGL · WEBXR</small><strong>Immersive model preview</strong><span id="spatial-xr-workspace-status">Preparing the model scene…</span></div>
+      <div><button id="enter-spatial-xr" class="primary">Enter VR</button><button id="close-spatial-xr" class="ghost">Close</button></div>
+    </header>
+    <canvas id="spatial-xr-canvas" aria-label="True 3D WebXR model preview"></canvas>
+    <footer><span>Desktop: drag to orbit · wheel to zoom</span><span>Headset: pinch one hand to move · pinch two hands to scale and rotate</span></footer>
+  </dialog>
+
   <dialog id="gravity-workspace" class="gravity-workspace">
     <div class="gravity-workspace-header">
       <div><small>INTERACTIVE POTENTIAL-FIELD INTERPRETATION</small><strong>Gravity results workspace</strong></div>
@@ -1413,6 +1473,6 @@
   </div>
 
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="app.js?v=88"></script>
+  <script type="module" src="app.js?v=89"></script>
 </body>
 </html>
