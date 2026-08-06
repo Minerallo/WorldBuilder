@@ -73,6 +73,9 @@ The prototype supports:
 - An advanced per-feature JSON editor for parameters not yet represented by a
   dedicated graphical control.
 - Live `.wb` JSON and `.grid` generation, import, export, and local autosave.
+- A ParaView-style field calculator with named expressions, scientific and
+  conditional functions, grid resampling, range previews, reusable calculated
+  fields, and persistent expression history.
 - Experimental local spatial controls: webcam hand tracking for camera navigation,
   feature/vertex/depth-handle editing, and interface activation; plus an optional
   true 3D WebGL preview with an immersive WebXR entry point on supported devices.

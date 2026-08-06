@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Visual model builder for the Geodynamic World Builder">
   <title>GWB Visual Builder</title>
-  <link rel="stylesheet" href="styles.css?v=53">
+  <link rel="stylesheet" href="styles.css?v=55">
 </head>
 <body>
   <section id="welcome-screen" class="welcome-screen hidden" aria-labelledby="welcome-title">
@@ -1069,36 +1069,38 @@
             <span>⋮⋮</span><strong>Field calculator</strong>
             <button id="close-field-calculator" class="close-button" aria-label="Close field calculator">×</button>
           </div>
-          <p class="shape-help">Combine numerical grids without changing the source layers. The second field is resampled onto field A where required.</p>
-          <label>Field A
-            <select id="calculator-source-a"></select>
+          <p class="shape-help">Build an expression from numerical fields and scientific functions. Inputs are resampled onto the selected output grid; source layers remain unchanged.</p>
+          <label>Output grid
+            <select id="calculator-reference-grid"></select>
           </label>
-          <label>Operation
-            <select id="calculator-operation">
-              <option value="subtract">Subtract · A − B</option>
-              <option value="reverse-subtract">Reverse subtract · B − A</option>
-              <option value="add">Add · A + B</option>
-              <option value="multiply">Multiply · A × B</option>
-              <option value="divide">Divide · A ÷ B</option>
-              <option value="gradient">Gradient magnitude · |∇A|</option>
-              <option value="gradient-x">Horizontal derivative · ∂A/∂x</option>
-              <option value="gradient-y">Vertical derivative · ∂A/∂y</option>
-              <option value="scale-offset">Scale and offset</option>
-              <option value="absolute">Absolute value · |A|</option>
-            </select>
-          </label>
-          <label id="calculator-source-b-row">Field B
-            <select id="calculator-source-b"></select>
-          </label>
-          <div id="calculator-scale-row" class="form-grid hidden">
-            <label>Scale<input id="calculator-scale" type="number" step="any" value="1"></label>
-            <label>Offset<input id="calculator-offset" type="number" step="any" value="0"></label>
+          <section class="calculator-expression-panel">
+            <div class="calculator-expression-heading"><small>EXPRESSION</small><button id="calculator-clear" class="ghost" type="button">Clear</button></div>
+            <textarea id="calculator-expression" rows="3" spellcheck="false" placeholder="topography - lithosphere"></textarea>
+            <div id="calculator-expression-feedback" class="calculator-expression-feedback">Choose a field below to begin.</div>
+          </section>
+          <section class="calculator-keypad" aria-label="Expression keypad">
+            <button type="button" data-calculator-insert=" + ">+</button><button type="button" data-calculator-insert=" - ">−</button><button type="button" data-calculator-insert=" * ">×</button><button type="button" data-calculator-insert=" / ">÷</button><button type="button" data-calculator-insert=" ^ ">xʸ</button><button type="button" data-calculator-insert="(">(</button><button type="button" data-calculator-insert=")">)</button><button type="button" data-calculator-backspace aria-label="Delete previous character">⌫</button>
+          </section>
+          <details class="calculator-library" open>
+            <summary>Scalar fields <span id="calculator-field-count">0</span></summary>
+            <div id="calculator-field-buttons" class="calculator-field-buttons"></div>
+          </details>
+          <details class="calculator-library" open>
+            <summary>Functions</summary>
+            <div class="calculator-function-buttons">
+              <button type="button" data-calculator-function="abs">abs</button><button type="button" data-calculator-function="sqrt">sqrt</button><button type="button" data-calculator-function="normalize">normalize</button><button type="button" data-calculator-function="grad">|∇|</button><button type="button" data-calculator-function="gradx">∂/∂x</button><button type="button" data-calculator-function="grady">∂/∂y</button><button type="button" data-calculator-function="ln">ln</button><button type="button" data-calculator-function="log10">log10</button><button type="button" data-calculator-function="exp">exp</button><button type="button" data-calculator-function="sin">sin</button><button type="button" data-calculator-function="cos">cos</button><button type="button" data-calculator-function="min">min</button><button type="button" data-calculator-function="max">max</button><button type="button" data-calculator-function="avg">avg</button><button type="button" data-calculator-function="clamp">clamp</button><button type="button" data-calculator-function="where">where</button>
+            </div>
+          </details>
+          <div class="form-grid calculator-result-fields">
+            <label>Result name<input id="calculator-result-name" type="text" maxlength="80" placeholder="Calculated field"></label>
+            <label>Unit<input id="calculator-result-unit" type="text" maxlength="24" placeholder="auto / optional"></label>
           </div>
-          <label>Result layer name
-            <input id="calculator-result-name" type="text" maxlength="80" placeholder="Generated automatically">
-          </label>
-          <button id="calculate-field" class="wide primary">Calculate new layer</button>
+          <div class="calculator-actions"><button id="preview-field-expression" class="ghost">Preview range</button><button id="calculate-field" class="primary">Create result field</button></div>
           <p id="field-calculator-status" class="shape-help">Load topography, tomography, lithosphere, or compute gravity to begin.</p>
+          <details class="calculator-library calculator-history">
+            <summary>Expression history <span id="calculator-history-count">0</span></summary>
+            <div id="calculator-history-list"></div>
+          </details>
         </aside>
         <div id="empty-state" class="empty-state">
           <div class="empty-icon">＋</div>
@@ -1491,6 +1493,6 @@
   </div>
 
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="app.js?v=100"></script>
+  <script type="module" src="app.js?v=106"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@ import {
   buildLegacyVtk, buildObj, buildGeoJson, buildGeometryCsv,
   connectFeatures, validateProject, importWorldBuilder, importFeature,
   applyGridConfig, featureToWorldBuilder, geologicalLayerPreset, createPlacementPoints,
-  deriveSubductionDipPoint, applyFieldOperation, clipSegmentToBounds
+  deriveSubductionDipPoint, clipSegmentToBounds
 } from "./core.js";
 import { TOMOGRAPHY_CATALOG, searchTomographyModels, tomographyModelById } from "./tomography-catalog.mjs";
 import { LITHOSPHERE_CATALOG, searchLithosphereModels, lithosphereModelById } from "./lithosphere-catalog.mjs";
@@ -17,6 +17,7 @@ import { convertTomographyToTemperature, ASPECT_TOMOGRAPHY_DEFAULTS } from "./to
 import { buildAspectAscii, buildAspectCompositionContours } from "./aspect-ascii.mjs";
 import { DEFAULT_RHEOLOGY, computeStrengthProfile, computeBdtGrid, parseEarthquakeGeoJson, compareSeismicityToBdt } from "./rheology.mjs";
 import { advanceTutorialAction, shouldBlockTutorialInteraction } from "./tutorial-engine.mjs";
+import { evaluateFieldExpression, parseFieldExpression } from "./field-expression.mjs";
 import { SpatialControls } from "./spatial-controls.mjs?v=3";
 import { SpatialXRPreview } from "./spatial-xr.mjs";
 
@@ -125,7 +126,7 @@ const DEFAULT_UI = {
   gravityWorkspaceMinimized: false, gravityWorkspaceLayout: "triple",
   gravityWorkspaceContoursOnly: false,
   gravityWorkspaceSectionPicking: false, gravityWorkspaceContourEditing: false,
-  minimizedEditors: [], minimizedWorkspaces: [], compactPanel: null
+  minimizedEditors: [], minimizedWorkspaces: [], compactPanel: null, fieldCalculatorHistory: []
 };
 const FLOATING_EDITOR_TOGGLES = {
   "shape-editor":"toggle-shape-editor","map-editor":"toggle-map-editor","spatial-editor":"toggle-spatial-controls",
@@ -829,7 +830,7 @@ function setFloatingEditorMinimized(editor,minimized,{save=true,announce=true}={
   const restore=ensureFloatingEditorDockItem(editor);restore.hidden=!minimized;
   const toggle=document.querySelector(`#${FLOATING_EDITOR_TOGGLES[editor.id]}`);
   if(minimized){editor.classList.add("hidden");toggle?.setAttribute("aria-expanded","false");}
-  else{editor.classList.remove("hidden");toggle?.setAttribute("aria-expanded","true");requestAnimationFrame(()=>positionFloatingEditor(editor));}
+  else{editor.classList.remove("hidden");toggle?.setAttribute("aria-expanded","true");if(editor.id==="field-calculator")syncFieldCalculator();requestAnimationFrame(()=>positionFloatingEditor(editor));}
   syncWorkspaceDock();if(save)persist();
   if(announce)showToast(`${floatingEditorLabel(editor)} ${minimized?"minimized · click its dock card to restore":"restored"}`);
 }
@@ -1252,7 +1253,7 @@ function calculatorSources() {
   }
   ensureDerivedFields().forEach(field => {
     const source = normalizedCalculatorGrid(`derived:${field.id}`, `Calculated · ${field.name}`, field, field.unit || "");
-    if (source) sources.push(source);
+    if (source) { source.symbol=field.symbol||""; sources.push(source); }
   });
   return sources.filter(Boolean);
 }
@@ -1274,85 +1275,107 @@ function sampleCalculatorGrid(grid, x, y) {
   return upper * (1 - ty) + lower * ty;
 }
 
+function calculatorSymbol(value,fallback="field") {
+  const symbol=String(value||fallback).toLowerCase().replace(/[^a-z0-9_]+/g,"_").replace(/^_+|_+$/g,"").replace(/^[0-9]/,"field_$&");
+  return symbol||fallback;
+}
+
 function fieldOperationLabel(operation) {
-  return {
-    subtract: "A − B", "reverse-subtract": "B − A", add: "A + B",
-    multiply: "A × B", divide: "A ÷ B", gradient: "|∇A|",
-    "gradient-x": "∂A/∂x", "gradient-y": "∂A/∂y",
-    "scale-offset": "A × scale + offset", absolute: "|A|"
-  }[operation] || operation;
+  return {subtract:"A − B","reverse-subtract":"B − A",add:"A + B",multiply:"A × B",divide:"A ÷ B",gradient:"|∇A|","gradient-x":"∂A/∂x","gradient-y":"∂A/∂y","scale-offset":"A × scale + offset",absolute:"|A|"}[operation]||operation||"expression";
+}
+
+function calculatorExpressionSources() {
+  const used=new Set();
+  return calculatorSources().map((source,index)=>{
+    const preferred=source.symbol||calculatorSymbol(source.id.startsWith("derived:")?source.label.replace(/^Calculated · /,""):source.id,`field_${index+1}`);
+    let symbol=preferred,suffix=2;while(used.has(symbol))symbol=`${preferred}_${suffix++}`;used.add(symbol);
+    return{...source,symbol};
+  });
+}
+
+function calculatorVariablesOnGrid(sources,reference) {
+  const dx=(reference.east-reference.west)/Math.max(1,reference.nx-1),dy=(reference.north-reference.south)/Math.max(1,reference.ny-1),variables={};
+  sources.forEach(source=>{
+    const same=source.nx===reference.nx&&source.ny===reference.ny&&source.west===reference.west&&source.east===reference.east&&source.south===reference.south&&source.north===reference.north;
+    variables[source.symbol]=same?[...source.values]:reference.values.map((_,index)=>{const column=index%reference.nx,row=Math.floor(index/reference.nx);return sampleCalculatorGrid(source,reference.west+column*dx,reference.north-row*dy);});
+  });
+  return{variables,dx,dy};
+}
+
+function calculatorStatistics(values) {
+  const finite=values.filter(Number.isFinite);if(!finite.length)throw new Error("The expression produced no finite values in the overlapping domain.");
+  const mean=finite.reduce((sum,value)=>sum+value,0)/finite.length;
+  return{finite,min:Math.min(...finite),max:Math.max(...finite),mean};
+}
+
+function formatCalculatorNumber(value){if(!Number.isFinite(value))return"NaN";const absolute=Math.abs(value);return absolute>=1e5||(absolute>0&&absolute<1e-3)?value.toExponential(4):value.toLocaleString(undefined,{maximumFractionDigits:5});}
+
+function evaluateCalculatorExpression() {
+  const sources=calculatorExpressionSources(),reference=sources.find(source=>source.id===document.querySelector("#calculator-reference-grid").value)||sources[0];
+  if(!reference)throw new Error("Load at least one numerical field first.");
+  const expression=document.querySelector("#calculator-expression").value.trim();
+  const {variables,dx,dy}=calculatorVariablesOnGrid(sources,reference);
+  const result=evaluateFieldExpression(expression,variables,{nx:reference.nx,ny:reference.ny,dx,dy});
+  return{...result,expression,reference,sources,statistics:calculatorStatistics(result.values)};
+}
+
+function inferredCalculatorUnit(result) {
+  const explicit=document.querySelector("#calculator-result-unit").value.trim();if(explicit)return explicit;
+  const source=result.sources.find(item=>item.symbol===result.identifiers[0]);
+  if(result.identifiers.length!==1||!source)return"";
+  if(/\bgrad(?:x|y)?\s*\(/i.test(result.expression))return`${source.unit||"value"}/${state.settings.coordinateSystem==="spherical"?"°":"km"}`;
+  return source.unit||"";
+}
+
+function setCalculatorFeedback(message,type="") {
+  const feedback=document.querySelector("#calculator-expression-feedback");feedback.textContent=message;feedback.classList.toggle("valid",type==="valid");feedback.classList.toggle("error",type==="error");
+}
+
+function previewFieldExpression() {
+  const status=document.querySelector("#field-calculator-status");
+  try{const result=evaluateCalculatorExpression(),stats=result.statistics;setCalculatorFeedback(`Valid · ${result.identifiers.length} field${result.identifiers.length===1?"":"s"} · ${stats.finite.length.toLocaleString()} finite samples`,"valid");status.textContent=`Preview: min ${formatCalculatorNumber(stats.min)} · mean ${formatCalculatorNumber(stats.mean)} · max ${formatCalculatorNumber(stats.max)}.`;}
+  catch(error){setCalculatorFeedback(error.message,"error");status.textContent=error.message;}
 }
 
 function calculateDerivedField() {
-  const sourceMap = new Map(calculatorSources().map(source => [source.id, source]));
-  const sourceA = sourceMap.get(document.querySelector("#calculator-source-a").value);
-  const operation = document.querySelector("#calculator-operation").value;
-  const sourceB = sourceMap.get(document.querySelector("#calculator-source-b").value);
-  const binary = ["subtract", "reverse-subtract", "add", "multiply", "divide"].includes(operation);
-  const status = document.querySelector("#field-calculator-status");
-  if (!sourceA || (binary && !sourceB)) {
-    status.textContent = "Load the required numerical source fields first.";
-    return;
-  }
-  const dx = (sourceA.east - sourceA.west) / Math.max(1, sourceA.nx - 1);
-  const dy = (sourceA.north - sourceA.south) / Math.max(1, sourceA.ny - 1);
-  const sampledB = binary ? sourceA.values.map((_, index) => {
-    const column = index % sourceA.nx; const row = Math.floor(index / sourceA.nx);
-    return sampleCalculatorGrid(sourceB, sourceA.west + column * dx, sourceA.north - row * dy);
-  }) : [];
-  let values;
-  try {
-    values = applyFieldOperation(sourceA.values, sampledB, {
-      operation, nx: sourceA.nx, ny: sourceA.ny, dx, dy,
-      scale: Number(document.querySelector("#calculator-scale").value),
-      offset: Number(document.querySelector("#calculator-offset").value)
-    });
-  } catch (error) {
-    status.textContent = error.message;
-    return;
-  }
-  const finite = values.filter(Number.isFinite);
-  if (!finite.length) {
-    status.textContent = "The operation produced no finite values in the overlapping domain.";
-    return;
-  }
-  const nameInput = document.querySelector("#calculator-result-name");
-  const name = nameInput.value.trim() || `${sourceA.label} · ${fieldOperationLabel(operation)}`;
-  const coordinateUnit = state.settings.coordinateSystem === "spherical" ? "°" : "m";
-  let unit = sourceA.unit;
-  if (["gradient", "gradient-x", "gradient-y"].includes(operation)) unit = `${sourceA.unit || "value"}/${coordinateUnit}`;
-  else if (operation === "multiply") unit = [sourceA.unit, sourceB?.unit].filter(Boolean).join("·");
-  else if (operation === "divide") unit = sourceB?.unit ? `${sourceA.unit || "value"}/${sourceB.unit}` : sourceA.unit;
-  else if (binary && sourceA.unit !== sourceB?.unit) unit = "";
-  ensureDerivedFields().push({
-    id: crypto.randomUUID(), name, operation, sourceA: sourceA.id, sourceB: sourceB?.id || null,
-    nx: sourceA.nx, ny: sourceA.ny, values,
-    west: sourceA.west, east: sourceA.east, south: sourceA.south, north: sourceA.north,
-    min: Math.min(...finite), max: Math.max(...finite), unit, visible: true, opacity: 72
-  });
-  nameInput.value = "";
-  status.textContent = `Created “${name}” with ${finite.length.toLocaleString()} finite samples.`;
-  persist(); renderLayersPanel(); syncFieldCalculator(); draw();
-  showToast(`Calculated layer created · ${name}`);
+  const status=document.querySelector("#field-calculator-status");let result;
+  try{result=evaluateCalculatorExpression();}catch(error){setCalculatorFeedback(error.message,"error");status.textContent=error.message;return;}
+  const nameInput=document.querySelector("#calculator-result-name"),name=nameInput.value.trim()||`Calculated field ${ensureDerivedFields().length+1}`,unit=inferredCalculatorUnit(result),existingSymbols=new Set(result.sources.map(source=>source.symbol)),symbol=(()=>{const base=calculatorSymbol(name,"result");let value=base,index=2;while(existingSymbols.has(value))value=`${base}_${index++}`;return value;})();
+  ensureDerivedFields().push({id:crypto.randomUUID(),name,symbol,expression:result.expression,sourceIds:result.identifiers,referenceGrid:result.reference.id,nx:result.reference.nx,ny:result.reference.ny,values:result.values,west:result.reference.west,east:result.reference.east,south:result.reference.south,north:result.reference.north,min:result.statistics.min,max:result.statistics.max,unit,visible:true,opacity:72});
+  state.ui.fieldCalculatorHistory=Array.isArray(state.ui.fieldCalculatorHistory)?state.ui.fieldCalculatorHistory:[];
+  state.ui.fieldCalculatorHistory=[{id:crypto.randomUUID(),name,expression:result.expression,referenceGrid:result.reference.id,unit,createdAt:new Date().toISOString()},...state.ui.fieldCalculatorHistory.filter(item=>item.expression!==result.expression)].slice(0,12);
+  nameInput.value="";setCalculatorFeedback(`Created ${symbol} · available for the next expression`,"valid");status.textContent=`Created “${name}” · min ${formatCalculatorNumber(result.statistics.min)} · max ${formatCalculatorNumber(result.statistics.max)}.`;
+  persist();renderLayersPanel();syncFieldCalculator();draw();showToast(`Calculated field created · ${name}`);
+}
+
+function insertCalculatorText(text,cursorOffset=text.length) {
+  const input=document.querySelector("#calculator-expression"),start=input.selectionStart??input.value.length,end=input.selectionEnd??start;input.setRangeText(text,start,end,"end");input.focus();input.setSelectionRange(start+cursorOffset,start+cursorOffset);validateCalculatorExpressionSyntax();
+}
+
+function insertCalculatorFunction(name) {
+  const input=document.querySelector("#calculator-expression"),start=input.selectionStart??input.value.length,end=input.selectionEnd??start,selection=input.value.slice(start,end);let text=`${name}(${selection})`,cursor=selection?text.length:name.length+1;
+  if(!selection&&name==="clamp")text="clamp(, 0, 1)";if(!selection&&name==="where")text="where(, , )";insertCalculatorText(text,cursor);
+}
+
+function validateCalculatorExpressionSyntax() {
+  const expression=document.querySelector("#calculator-expression").value.trim();if(!expression){setCalculatorFeedback("Choose a field or enter an expression.");return;}
+  try{parseFieldExpression(expression);setCalculatorFeedback("Syntax valid · preview to evaluate the active grids.","valid");}catch(error){setCalculatorFeedback(error.message,"error");}
+}
+
+function renderCalculatorHistory() {
+  const history=Array.isArray(state.ui.fieldCalculatorHistory)?state.ui.fieldCalculatorHistory:[],holder=document.querySelector("#calculator-history-list");document.querySelector("#calculator-history-count").textContent=history.length;
+  holder.innerHTML=history.length?history.map(item=>`<div class="calculator-history-entry"><button type="button" data-calculator-history="${item.id}" title="Load this expression"><strong>${escapeHtml(item.name)}</strong><code>${escapeHtml(item.expression)}</code></button><button type="button" data-remove-calculator-history="${item.id}" title="Remove from history">×</button></div>`).join(""):`<p class="shape-help">Created expressions will appear here.</p>`;
+  holder.querySelectorAll("[data-calculator-history]").forEach(button=>button.addEventListener("click",()=>{const item=history.find(entry=>entry.id===button.dataset.calculatorHistory);if(!item)return;document.querySelector("#calculator-expression").value=item.expression;document.querySelector("#calculator-result-name").value=item.name;document.querySelector("#calculator-result-unit").value=item.unit||"";const reference=document.querySelector("#calculator-reference-grid");if([...reference.options].some(option=>option.value===item.referenceGrid))reference.value=item.referenceGrid;validateCalculatorExpressionSyntax();}));
+  holder.querySelectorAll("[data-remove-calculator-history]").forEach(button=>button.addEventListener("click",()=>{state.ui.fieldCalculatorHistory=history.filter(item=>item.id!==button.dataset.removeCalculatorHistory);persist();renderCalculatorHistory();}));
 }
 
 function syncFieldCalculator() {
-  const sourceA = document.querySelector("#calculator-source-a");
-  const sourceB = document.querySelector("#calculator-source-b");
-  if (!sourceA || !sourceB) return;
-  const previousA = sourceA.value; const previousB = sourceB.value;
-  const sources = calculatorSources();
-  const options = sources.map(source => `<option value="${escapeHtml(source.id)}">${escapeHtml(source.label)} (${source.nx}×${source.ny})</option>`).join("");
-  sourceA.innerHTML = options || `<option value="">No numerical fields loaded</option>`;
-  sourceB.innerHTML = options || `<option value="">No numerical fields loaded</option>`;
-  if (sources.some(source => source.id === previousA)) sourceA.value = previousA;
-  if (sources.some(source => source.id === previousB)) sourceB.value = previousB;
-  if (sourceB.value === sourceA.value && sources.length > 1) sourceB.selectedIndex = 1;
-  const operation = document.querySelector("#calculator-operation").value;
-  const binary = ["subtract", "reverse-subtract", "add", "multiply", "divide"].includes(operation);
-  document.querySelector("#calculator-source-b-row").classList.toggle("hidden", !binary);
-  document.querySelector("#calculator-scale-row").classList.toggle("hidden", operation !== "scale-offset");
-  document.querySelector("#calculate-field").disabled = !sources.length || (binary && sources.length < 2);
+  const reference=document.querySelector("#calculator-reference-grid");if(!reference)return;const previous=reference.value,sources=calculatorExpressionSources();reference.innerHTML=sources.map(source=>`<option value="${escapeHtml(source.id)}">${escapeHtml(source.label)} · ${source.nx}×${source.ny}</option>`).join("")||`<option value="">No numerical fields loaded</option>`;if(sources.some(source=>source.id===previous))reference.value=previous;
+  const buttons=document.querySelector("#calculator-field-buttons");buttons.innerHTML=sources.map(source=>`<button type="button" data-calculator-symbol="${escapeHtml(source.symbol)}" title="Insert ${escapeHtml(source.label)}"><code>${escapeHtml(source.symbol)}</code><small>${escapeHtml(source.label)} · ${escapeHtml(source.unit||"unitless")}</small></button>`).join("")||`<p class="shape-help">Load or calculate a numerical grid first.</p>`;document.querySelector("#calculator-field-count").textContent=sources.length;
+  buttons.querySelectorAll("[data-calculator-symbol]").forEach(button=>button.addEventListener("click",()=>insertCalculatorText(button.dataset.calculatorSymbol)));
+  document.querySelector("#calculate-field").disabled=!sources.length;document.querySelector("#preview-field-expression").disabled=!sources.length;
+  const status=document.querySelector("#field-calculator-status");if(!sources.length)status.textContent="Load topography, tomography, lithosphere, or compute gravity to begin.";else if(status.textContent.startsWith("Load "))status.textContent=`${sources.length} numerical field${sources.length===1?" is":"s are"} ready for expressions.`;
+  const expression=document.querySelector("#calculator-expression");if(!expression.value&&sources.length)expression.value=sources[0].symbol;validateCalculatorExpressionSyntax();renderCalculatorHistory();
 }
 
 function geographicSourceBounds() {
@@ -5702,7 +5725,7 @@ function renderLayersPanel() {
     <div class="derived-layer-row ${field.visible === false ? "is-hidden" : ""}">
       <label>
         <input type="checkbox" data-toggle-derived-field="${field.id}" ${field.visible === false ? "" : "checked"}>
-        <span><strong>${escapeHtml(field.name)}</strong><small>${escapeHtml(fieldOperationLabel(field.operation))} · ${Number(field.min).toPrecision(3)} to ${Number(field.max).toPrecision(3)} ${escapeHtml(field.unit || "")}</small></span>
+        <span><strong>${escapeHtml(field.name)}</strong><small>${escapeHtml(field.expression||fieldOperationLabel(field.operation))} · ${Number(field.min).toPrecision(3)} to ${Number(field.max).toPrecision(3)} ${escapeHtml(field.unit || "")}</small></span>
       </label>
       <button class="ghost" data-remove-derived-field="${field.id}" title="Delete calculated result">×</button>
     </div>`).join("") : `<div class="navigator-empty">No calculated fields.</div>`;
@@ -7209,6 +7232,8 @@ function updateAll(rerenderInspector = true) {
   if (rerenderInspector) renderInspector();
   renderNavigator();
   renderLayersPanel();
+  const calculator=document.querySelector("#field-calculator");
+  if(calculator&&!calculator.classList.contains("hidden")&&!calculator.contains(document.activeElement))syncFieldCalculator();
   renderOutput();
   const hasDrawingContext = Object.values(state.paleogeography?.layers || {})
     .some(collection => collection?.features?.length)
@@ -9936,7 +9961,13 @@ document.querySelector("#close-field-calculator").addEventListener("click", () =
   document.querySelector("#field-calculator").classList.add("hidden");
   document.querySelector("#toggle-field-calculator").setAttribute("aria-expanded", "false");
 });
-document.querySelector("#calculator-operation").addEventListener("change", syncFieldCalculator);
+document.querySelector("#calculator-expression").addEventListener("input",validateCalculatorExpressionSyntax);
+document.querySelector("#calculator-reference-grid").addEventListener("change",validateCalculatorExpressionSyntax);
+document.querySelectorAll("[data-calculator-insert]").forEach(button=>button.addEventListener("click",()=>insertCalculatorText(button.dataset.calculatorInsert)));
+document.querySelectorAll("[data-calculator-function]").forEach(button=>button.addEventListener("click",()=>insertCalculatorFunction(button.dataset.calculatorFunction)));
+document.querySelector("[data-calculator-backspace]").addEventListener("click",()=>{const input=document.querySelector("#calculator-expression"),start=input.selectionStart??input.value.length,end=input.selectionEnd??start;if(start!==end)input.setRangeText("",start,end,"end");else if(start>0)input.setRangeText("",start-1,start,"end");input.focus();validateCalculatorExpressionSyntax();});
+document.querySelector("#calculator-clear").addEventListener("click",()=>{document.querySelector("#calculator-expression").value="";document.querySelector("#calculator-expression").focus();validateCalculatorExpressionSyntax();});
+document.querySelector("#preview-field-expression").addEventListener("click",previewFieldExpression);
 document.querySelector("#calculate-field").addEventListener("click", calculateDerivedField);
 document.querySelector("#compute-thermal-state").addEventListener("click", () => runModelComputation("thermal"));
 document.querySelector("#compute-isostatic-topography").addEventListener("click", () => runModelComputation("isostatic"));
