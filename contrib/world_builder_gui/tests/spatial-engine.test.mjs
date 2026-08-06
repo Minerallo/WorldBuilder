@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handPinchRatio, mapLandmarkToViewport, smoothPoint, twoHandTransform, SpatialGestureTracker } from "../spatial-engine.mjs";
+import { classifyHandGesture, handPinchRatio, mapLandmarkToViewport, smoothPoint, twoHandTransform, SpatialGestureTracker } from "../spatial-engine.mjs";
 
 function hand(tipDistance=.1,handedness="Right") {
   const landmarks=Array.from({length:21},()=>({x:.5,y:.5,z:0}));
@@ -9,8 +9,35 @@ function hand(tipDistance=.1,handedness="Right") {
   return {landmarks,handedness};
 }
 
+function posedHand(extended=[]) {
+  const landmarks=Array.from({length:21},()=>({x:.5,y:.72,z:0}));
+  landmarks[0]={x:.5,y:.9,z:0};landmarks[5]={x:.32,y:.65,z:0};landmarks[17]={x:.68,y:.65,z:0};
+  [[8,6,.32],[12,10,.44],[16,14,.56],[20,18,.68]].forEach(([tip,pip,x],index)=>{
+    landmarks[pip]={x,y:.52,z:0};
+    landmarks[tip]={x,y:extended.includes(index)?.18:.76,z:0};
+  });
+  landmarks[4]={x:.42,y:.72,z:0};
+  return landmarks;
+}
+
 test("pinch ratio is normalized by palm size",()=>{
   assert.ok(handPinchRatio(hand(.04).landmarks)<handPinchRatio(hand(.2).landmarks));
+});
+
+test("classifies conservative shortcut hand poses",()=>{
+  assert.equal(classifyHandGesture(posedHand([0,1,2,3])),"open-palm");
+  assert.equal(classifyHandGesture(posedHand([])),"fist");
+  assert.equal(classifyHandGesture(posedHand([0])),"point");
+  assert.equal(classifyHandGesture(posedHand([0,1])),"victory");
+});
+
+test("stabilizes a pose before exposing a gesture",()=>{
+  const tracker=new SpatialGestureTracker({mirror:false,smoothing:0});
+  const raw={landmarks:posedHand([0,1]),handedness:"Right"};
+  assert.equal(tracker.update([raw],{width:100,height:100},0).primary.gesture,"unknown");
+  assert.equal(tracker.update([raw],{width:100,height:100},20).primary.gesture,"unknown");
+  const stable=tracker.update([raw],{width:100,height:100},40).primary;
+  assert.equal(stable.gesture,"victory");assert.equal(stable.gestureBegan,true);
 });
 
 test("viewport mapping mirrors the camera and clamps margins",()=>{

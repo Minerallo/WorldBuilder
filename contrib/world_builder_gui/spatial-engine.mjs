@@ -19,6 +19,20 @@ export function handPinchRatio(landmarks) {
   return landmarkDistance(landmarks[4], landmarks[8]) / palm;
 }
 
+export function classifyHandGesture(landmarks) {
+  if (!Array.isArray(landmarks) || landmarks.length < 21) return "unknown";
+  const wrist=landmarks[0];
+  const palm=Math.max(1e-6,landmarkDistance(landmarks[5],landmarks[17]));
+  const extended=[[8,6],[12,10],[16,14],[20,18]].map(([tip,pip])=>
+    landmarkDistance(wrist,landmarks[tip])>landmarkDistance(wrist,landmarks[pip])+palm*.12
+  );
+  if(extended.every(Boolean))return "open-palm";
+  if(extended.every(value=>!value))return "fist";
+  if(extended[0]&&!extended[1]&&!extended[2]&&!extended[3])return "point";
+  if(extended[0]&&extended[1]&&!extended[2]&&!extended[3])return "victory";
+  return "unknown";
+}
+
 export function smoothPoint(previous, next, smoothing = 0.68) {
   if (!previous) return { ...next };
   const retained = clamp(Number(smoothing), 0, .96);
@@ -72,7 +86,7 @@ export class SpatialGestureTracker {
 
   reset() { this.hands.clear(); this.previousPair=null; }
 
-  update(rawHands, viewport) {
+  update(rawHands, viewport, timestamp=performance.now()) {
     const observed = new Set();
     const hands = (rawHands || []).map((raw,index) => {
       const key = raw.handedness || String(index);
@@ -83,8 +97,15 @@ export class SpatialGestureTracker {
       const pinching = prior?.pinching
         ? pinchRatio < Number(this.options.releaseThreshold)
         : pinchRatio < Number(this.options.pinchThreshold);
+      const rawGesture=pinching?"pinch":classifyHandGesture(raw.landmarks);
+      const gestureCandidate=rawGesture;
+      const gestureCandidateFrames=rawGesture===prior?.gestureCandidate?(prior.gestureCandidateFrames||0)+1:1;
+      const gesture=gestureCandidateFrames>=3?rawGesture:(prior?.gesture||"unknown");
+      const gestureStartedAt=gesture===prior?.gesture?prior.gestureStartedAt:Number(timestamp);
       const hand = {
-        ...raw,key,pointer,pinchRatio,pinching,
+        ...raw,key,pointer,pinchRatio,pinching,rawGesture,gestureCandidate,gestureCandidateFrames,gesture,
+        gestureBegan:gesture!=="unknown"&&gesture!==prior?.gesture,
+        gestureStartedAt,gestureDuration:Math.max(0,Number(timestamp)-gestureStartedAt),
         pinchStart:pinching && !prior?.pinching,
         pinchEnd:!pinching && Boolean(prior?.pinching)
       };

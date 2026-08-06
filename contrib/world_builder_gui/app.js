@@ -17,7 +17,7 @@ import { convertTomographyToTemperature, ASPECT_TOMOGRAPHY_DEFAULTS } from "./to
 import { buildAspectAscii, buildAspectCompositionContours } from "./aspect-ascii.mjs";
 import { DEFAULT_RHEOLOGY, computeStrengthProfile, computeBdtGrid, parseEarthquakeGeoJson, compareSeismicityToBdt } from "./rheology.mjs";
 import { advanceTutorialAction, shouldBlockTutorialInteraction } from "./tutorial-engine.mjs";
-import { SpatialControls } from "./spatial-controls.mjs";
+import { SpatialControls } from "./spatial-controls.mjs?v=3";
 import { SpatialXRPreview } from "./spatial-xr.mjs";
 
 const STORAGE_KEY = "gwb-visual-builder-v1";
@@ -162,7 +162,7 @@ const WELCOME_PREFERENCE_KEY = "gwb-visual-builder-show-welcome-v1";
 const SPATIAL_SETTINGS_KEY = "gwb-visual-builder-spatial-settings-v1";
 const DEFAULT_SPATIAL_SETTINGS = {
   mode:"navigation",dominantHand:"Right",mirror:true,showSkeleton:true,
-  smoothing:.68,pinchThreshold:.34,releaseThreshold:.46,gain:1,deviceId:""
+  shortcutGestures:true,smoothing:.68,pinchThreshold:.34,releaseThreshold:.46,gain:1,deviceId:""
 };
 const TUTORIALS = [
   {
@@ -355,9 +355,11 @@ let spatialControls = null;
 let spatialXRPreview = null;
 let spatialSettings = loadSpatialSettings();
 let spatialModelGrab = null;
+let spatialPaletteGrab = null;
 let spatialWindowGrab = null;
 let spatialCameraGrab = null;
 let spatialHoveredElement = null;
+let spatialGestureRuntime = {openStart:null,lastActionAt:-Infinity,victoryTriggered:false};
 let activitySequence = 0;
 let activityHideTimer = null;
 let activeViewport = "primary";
@@ -6650,13 +6652,14 @@ function syncSpatialControlsUI() {
   Object.entries(values).forEach(([id,value])=>{const input=document.querySelector(`#${id}`);if(input&&document.activeElement!==input)input.value=value;});
   document.querySelector("#spatial-mirror").checked=spatialSettings.mirror!==false;
   document.querySelector("#spatial-show-skeleton").checked=spatialSettings.showSkeleton!==false;
+  document.querySelector("#spatial-shortcut-gestures").checked=spatialSettings.shortcutGestures!==false;
   const mirrorTransform=spatialSettings.mirror===false?"none":"scaleX(-1)";
   document.querySelector("#spatial-video").style.transform=mirrorTransform;
   document.querySelector("#spatial-video-overlay").style.transform=mirrorTransform;
   document.querySelector("#spatial-smoothing-value").textContent=`${Math.round(spatialSettings.smoothing*100)}%`;
   document.querySelector("#spatial-pinch-value").textContent=`${Math.round(spatialSettings.pinchThreshold*100)}%`;
   document.querySelector("#spatial-gain-value").textContent=`${Math.round(spatialSettings.gain*100)}%`;
-  const notes={navigation:"Rotate, pan and zoom without modifying model geometry.",geometry:"Pinch features, vertices, thickness and sublayer handles. Interface controls remain locked.",interface:"Activate buttons and move floating windows without changing model geometry.",full:"Geometry, navigation and interface controls are all available."};
+  const notes={navigation:"Rotate, pan and zoom only. Switch to Geometry editing to add or reshape features.",geometry:"Pinch a library feature and release it on Plan, or edit existing vertices, thickness and sublayer handles.",interface:"Activate buttons and move floating windows without changing model geometry.",full:"Feature placement, geometry, navigation and interface controls are all available."};
   document.querySelector("#spatial-mode-note").textContent=notes[spatialSettings.mode];
   document.body.classList.toggle("spatial-navigation-only",spatialSettings.mode==="navigation");
   configureSpatialControls();
@@ -6695,7 +6698,8 @@ async function startSpatialControls() {
 }
 
 function clearSpatialInteraction() {
-  spatialModelGrab=null;spatialWindowGrab=null;spatialCameraGrab=null;
+  spatialModelGrab=null;cancelSpatialPaletteGrab();spatialWindowGrab=null;spatialCameraGrab=null;
+  spatialGestureRuntime={openStart:null,lastActionAt:-Infinity,victoryTriggered:false};
   if(spatialHoveredElement)spatialHoveredElement.classList.remove("spatial-hover");
   spatialHoveredElement=null;
   document.querySelector("#spatial-pointer").classList.add("hidden");
@@ -6710,11 +6714,43 @@ function stopSpatialControls(report=true) {
 }
 
 function setSpatialHoveredElement(element) {
-  const interactive=element?.closest?.("button,summary,label,input,select,.shape-editor-header,canvas")||null;
+  const interactive=element?.closest?.("button,summary,label,input,select,.feature-card,.shape-editor-header,canvas")||null;
   if(interactive===spatialHoveredElement)return;
   spatialHoveredElement?.classList.remove("spatial-hover");
   spatialHoveredElement=interactive;
   spatialHoveredElement?.classList.add("spatial-hover");
+}
+
+function beginSpatialPaletteGrab(card) {
+  const model=card?.dataset?.model;
+  if(!FEATURE_TYPES[model])return false;
+  spatialPaletteGrab={model,card};
+  card.classList.add("spatial-dragging");
+  document.body.classList.add("spatial-palette-grab");
+  showToast(`${FEATURE_TYPES[model].label} attached · keep pinching, move onto the plan, then release`);
+  return true;
+}
+
+function cancelSpatialPaletteGrab(message="") {
+  spatialPaletteGrab?.card?.classList.remove("spatial-dragging");
+  spatialPaletteGrab=null;
+  document.body.classList.remove("spatial-palette-grab","spatial-drop-ready");
+  if(message)showToast(message);
+}
+
+function finishSpatialPaletteGrab(pointer,target) {
+  if(!spatialPaletteGrab)return false;
+  const {model}=spatialPaletteGrab;
+  const targetCanvas=target?.closest?.("canvas");
+  if(targetCanvas===primaryCanvas&&viewportModes.primary==="plan"){
+    const rect=primaryCanvas.getBoundingClientRect();
+    setActiveViewport("primary");
+    cancelSpatialPaletteGrab();
+    addFeature(model,pointer.x-rect.left,pointer.y-rect.top);
+    return true;
+  }
+  cancelSpatialPaletteGrab(`${FEATURE_TYPES[model].label} placement cancelled · release over the Plan canvas to add it`);
+  return false;
 }
 
 function spatialCanvasPoint(target,pointer) {
@@ -6764,6 +6800,53 @@ function finishSpatialModelGrab() {
   const mode=spatialModelGrab.mode;spatialModelGrab=null;updateAll();renderInspector();showToast(`Spatial ${mode.replaceAll("-"," ")} edit committed · Undo is available`);
 }
 
+function cancelSpatialModelGrab() {
+  const grab=spatialModelGrab;if(!grab)return false;
+  const feature=state.features.find(item=>item.id===grab.id);
+  if(feature){
+    feature.points=grab.original.map(point=>[...point]);
+    feature.dipPoint=grab.originalDip?[...grab.originalDip]:null;
+    if(grab.mode==="plume-resize")feature.semiMajorAxis=grab.originalRadius;
+    if(grab.mode==="thickness"){
+      if(feature.model==="subducting plate"||feature.model==="fault")feature.thickness=grab.originalThickness;
+      else feature.maxDepth=Number(feature.minDepth)+grab.originalThickness;
+    }
+    feature.layers=structuredClone(grab.originalLayers);
+  }
+  spatialModelGrab=null;draw();renderInspector();showToast("Spatial edit cancelled");return true;
+}
+
+function cancelActiveSpatialGrab() {
+  if(cancelSpatialModelGrab())return;
+  const cancelled=Boolean(spatialPaletteGrab)||Boolean(spatialWindowGrab)||Boolean(spatialCameraGrab);
+  if(spatialPaletteGrab)cancelSpatialPaletteGrab();
+  spatialWindowGrab=null;spatialCameraGrab=null;
+  if(cancelled)showToast("Spatial grab cancelled");
+}
+
+function handleSpatialShortcutGesture(primary,timestamp) {
+  if(spatialSettings.shortcutGestures===false||primary.pinching)return;
+  const runtime=spatialGestureRuntime,now=Number(timestamp||performance.now());
+  if(primary.gesture==="fist"&&primary.gestureBegan){cancelActiveSpatialGrab();runtime.openStart=null;return;}
+  if(primary.gesture==="victory"){
+    runtime.openStart=null;
+    if(primary.gestureDuration>=650&&!runtime.victoryTriggered&&now-runtime.lastActionAt>900){
+      runtime.victoryTriggered=true;runtime.lastActionAt=now;document.querySelector("#fit-view").click();showToast("V gesture · model fitted to view");
+    }
+    return;
+  }
+  runtime.victoryTriggered=false;
+  if(primary.gesture!=="open-palm"){runtime.openStart=null;return;}
+  if(!runtime.openStart){runtime.openStart={x:primary.pointer.x,y:primary.pointer.y,at:now};return;}
+  const elapsed=now-runtime.openStart.at,dx=primary.pointer.x-runtime.openStart.x,dy=primary.pointer.y-runtime.openStart.y;
+  const threshold=Math.min(180,window.innerWidth*.13);
+  if(elapsed>=160&&elapsed<=950&&Math.abs(dx)>=threshold&&Math.abs(dy)<Math.max(90,Math.abs(dx)*.55)&&now-runtime.lastActionAt>900){
+    runtime.lastActionAt=now;runtime.openStart=null;
+    if(dx<0){undoModelEdit();showToast("Open-palm swipe left · Undo");}
+    else{redoModelEdit();showToast("Open-palm swipe right · Redo");}
+  }else if(elapsed>950)runtime.openStart={x:primary.pointer.x,y:primary.pointer.y,at:now};
+}
+
 function beginSpatialWindowGrab(pointer,header) {
   const editor=header.closest(".shape-editor,.map-editor");if(!editor)return false;
   const rect=editor.getBoundingClientRect();floatingEditorZ+=1;editor.style.zIndex=String(floatingEditorZ);
@@ -6796,14 +6879,18 @@ function handleSpatialFrame(frame) {
   if(!primary){
     pointerElement.classList.add("hidden");setSpatialHoveredElement(null);
     if(spatialModelGrab)finishSpatialModelGrab();
+    if(spatialPaletteGrab)cancelSpatialPaletteGrab("Feature placement cancelled · hand tracking was lost");
     if(spatialWindowGrab){spatialWindowGrab=null;persist();}
     spatialCameraGrab=null;
     return;
   }
-  const pointer=primary.pointer;pointerElement.classList.remove("hidden");pointerElement.classList.toggle("pinching",primary.pinching);pointerElement.classList.toggle("two-hand",frame.twoHand);pointerElement.style.left=`${pointer.x}px`;pointerElement.style.top=`${pointer.y}px`;pointerElement.querySelector("small").textContent=frame.twoHand?"TRANSFORM":primary.pinching?"GRAB":"POINT";
+  const pointer=primary.pointer;pointerElement.classList.remove("hidden");pointerElement.classList.toggle("pinching",primary.pinching);pointerElement.classList.toggle("two-hand",frame.twoHand);pointerElement.style.left=`${pointer.x}px`;pointerElement.style.top=`${pointer.y}px`;pointerElement.querySelector("small").textContent=frame.twoHand?"TRANSFORM":primary.pinching?"GRAB":({fist:"CANCEL",victory:"FIT","open-palm":"SWIPE"}[primary.gesture]||"POINT");
+  handleSpatialShortcutGesture(primary,frame.timestamp);
   const target=document.elementFromPoint(pointer.x,pointer.y);setSpatialHoveredElement(target);
+  if(spatialPaletteGrab)document.body.classList.toggle("spatial-drop-ready",target?.closest?.("canvas")===primaryCanvas&&viewportModes.primary==="plan");
   if(frame.twoHand){
     if(spatialModelGrab)finishSpatialModelGrab();
+    if(spatialPaletteGrab)cancelSpatialPaletteGrab("Feature placement cancelled · use one hand for library placement");
     if(spatialWindowGrab){spatialWindowGrab=null;persist();}
     spatialCameraGrab=null;
     if(frame.transform){const gain=Number(spatialSettings.gain)||1,scale=Math.max(.93,Math.min(1.07,1+(frame.transform.scale-1)*gain));changeCamera({zoomFactor:scale,orbitYawDelta:frame.transform.rotation*gain,panX:frame.transform.panX*.28*gain,panY:frame.transform.panY*.28*gain});}
@@ -6812,9 +6899,15 @@ function handleSpatialFrame(frame) {
   if(spatialModelGrab)moveSpatialModelGrab(pointer);
   else if(spatialWindowGrab)moveSpatialWindowGrab(pointer);
   else if(spatialCameraGrab)moveSpatialCameraGrab(pointer);
-  if(primary.pinchEnd){finishSpatialModelGrab();if(spatialWindowGrab){spatialWindowGrab=null;persist();showToast("Window position saved");}if(spatialCameraGrab){spatialCameraGrab=null;persist();}return;}
+  if(primary.pinchEnd){if(spatialPaletteGrab)finishSpatialPaletteGrab(pointer,target);finishSpatialModelGrab();if(spatialWindowGrab){spatialWindowGrab=null;persist();showToast("Window position saved");}if(spatialCameraGrab){spatialCameraGrab=null;persist();}return;}
   if(!primary.pinchStart)return;
   const mode=spatialSettings.mode,header=target?.closest?.(".shape-editor-header");
+  const paletteCard=target?.closest?.(".feature-card");
+  if(paletteCard){
+    if(mode==="geometry"||mode==="full")beginSpatialPaletteGrab(paletteCard);
+    else showToast("Switch Spatial interaction mode to Geometry editing or Full to add features");
+    return;
+  }
   if((mode==="interface"||mode==="full")&&header&&beginSpatialWindowGrab(pointer,header))return;
   const targetCanvas=target?.closest?.("canvas");
   if((mode==="geometry"||mode==="full")&&targetCanvas&&beginSpatialModelGrab(pointer,targetCanvas))return;
@@ -9608,6 +9701,7 @@ document.querySelector("#spatial-dominant-hand").addEventListener("change",event
 document.querySelector("#spatial-camera-device").addEventListener("change",event=>{spatialSettings.deviceId=event.target.value;saveSpatialSettings();if(spatialControls?.running)startSpatialControls();});
 document.querySelector("#spatial-mirror").addEventListener("change",event=>{spatialSettings.mirror=event.target.checked;saveSpatialSettings();configureSpatialControls();document.querySelector("#spatial-video").style.transform=event.target.checked?"scaleX(-1)":"none";document.querySelector("#spatial-video-overlay").style.transform=event.target.checked?"scaleX(-1)":"none";});
 document.querySelector("#spatial-show-skeleton").addEventListener("change",event=>{spatialSettings.showSkeleton=event.target.checked;saveSpatialSettings();configureSpatialControls();});
+document.querySelector("#spatial-shortcut-gestures").addEventListener("change",event=>{spatialSettings.shortcutGestures=event.target.checked;saveSpatialSettings();spatialGestureRuntime={openStart:null,lastActionAt:-Infinity,victoryTriggered:false};showToast(event.target.checked?"Spatial shortcut gestures enabled":"Spatial shortcut gestures disabled");});
 document.querySelector("#spatial-smoothing").addEventListener("input",event=>{spatialSettings.smoothing=Number(event.target.value)/100;document.querySelector("#spatial-smoothing-value").textContent=`${event.target.value}%`;saveSpatialSettings();configureSpatialControls();});
 document.querySelector("#spatial-pinch").addEventListener("input",event=>{spatialSettings.pinchThreshold=Number(event.target.value)/100;document.querySelector("#spatial-pinch-value").textContent=`${event.target.value}%`;saveSpatialSettings();configureSpatialControls();});
 document.querySelector("#spatial-gain").addEventListener("input",event=>{spatialSettings.gain=Number(event.target.value)/100;document.querySelector("#spatial-gain-value").textContent=`${event.target.value}%`;saveSpatialSettings();});

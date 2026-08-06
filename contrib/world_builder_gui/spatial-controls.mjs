@@ -1,4 +1,4 @@
-import { HAND_CONNECTIONS, SpatialGestureTracker } from "./spatial-engine.mjs";
+import { HAND_CONNECTIONS, SpatialGestureTracker } from "./spatial-engine.mjs?v=2";
 
 export class SpatialControls {
   constructor({ video,overlay,onFrame,onStatus }) {
@@ -52,9 +52,9 @@ export class SpatialControls {
     if (message.type!=="result") return;
     this.processing=false;
     const viewport={width:window.innerWidth,height:window.innerHeight};
-    const frame=this.tracker.update(message.hands,viewport);
+    const frame=this.tracker.update(message.hands,viewport,message.timestamp);
     this.draw(message.hands);
-    this.onFrame?.(frame);
+    this.onFrame?.({...frame,timestamp:message.timestamp});
   }
 
   async capture(timestamp) {

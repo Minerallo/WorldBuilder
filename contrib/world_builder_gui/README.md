@@ -87,7 +87,13 @@ camera.
 - Move one open hand to pan; pinch while moving to orbit.
 - Pinch a visible feature, vertex, dip handle, thickness handle, or internal
   boundary to edit it directly. Releasing the pinch commits one undoable edit.
+- In Geometry mode, pinch-hold a feature-library card, carry it onto the Plan
+  canvas, and release to create the feature at that location.
 - Pinch with two hands to zoom, rotate, and pan the current model view.
+- Optional shortcut poses use conservative three-frame stabilization: make a
+  fist to cancel the active grab, hold a V sign to fit the model to view, or
+  swipe an open palm left/right to undo/redo. They can be disabled together in
+  Tracking and calibration.
 - Interface mode exposes a dwell cursor for large buttons and movable tool
   windows. Geometry mode leaves the rest of the interface untouched.
 - Calibrate neutral position after changing camera placement. Adjustable

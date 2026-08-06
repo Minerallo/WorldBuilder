@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Visual model builder for the Geodynamic World Builder">
   <title>GWB Visual Builder</title>
-  <link rel="stylesheet" href="styles.css?v=50">
+  <link rel="stylesheet" href="styles.css?v=51">
 </head>
 <body>
   <section id="welcome-screen" class="welcome-screen hidden" aria-labelledby="welcome-title">
@@ -561,6 +561,7 @@
             <label>Dominant hand<select id="spatial-dominant-hand"><option value="Right">Right</option><option value="Left">Left</option></select></label>
             <label class="checkbox-row"><input id="spatial-mirror" type="checkbox" checked> Mirror camera movement</label>
             <label class="checkbox-row"><input id="spatial-show-skeleton" type="checkbox" checked> Show hand skeleton</label>
+            <label class="checkbox-row"><input id="spatial-shortcut-gestures" type="checkbox" checked> Enable shortcut gestures</label>
             <label>Motion smoothing <output id="spatial-smoothing-value">68%</output><input id="spatial-smoothing" type="range" min="0" max="92" value="68"></label>
             <label>Pinch sensitivity <output id="spatial-pinch-value">34%</output><input id="spatial-pinch" type="range" min="18" max="55" value="34"></label>
             <label>Navigation gain <output id="spatial-gain-value">100%</output><input id="spatial-gain" type="range" min="30" max="220" value="100"></label>
@@ -570,7 +571,11 @@
             <summary>Gesture guide</summary>
             <div><span>☝</span><p><strong>Point</strong><small>Move the spatial cursor</small></p></div>
             <div><span>👌</span><p><strong>Pinch</strong><small>Select, activate, grab or release</small></p></div>
+            <div><span>▰</span><p><strong>Add a feature</strong><small>In Geometry mode, pinch a feature card, drag to Plan, release</small></p></div>
             <div><span>↔</span><p><strong>Two pinches</strong><small>Zoom, rotate and pan the active view</small></p></div>
+            <div><span>✊</span><p><strong>Closed fist</strong><small>Cancel the current spatial grab</small></p></div>
+            <div><span>✌</span><p><strong>Hold V sign</strong><small>Fit the complete model into view</small></p></div>
+            <div><span>🖐</span><p><strong>Open-palm swipe</strong><small>Swipe left to undo · right to redo</small></p></div>
           </details>
           <section class="spatial-xr-card">
             <div><small>IMMERSIVE EXTENSION</small><strong>WebXR headset</strong></div>
@@ -1473,6 +1478,6 @@
   </div>
 
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="app.js?v=90"></script>
+  <script type="module" src="app.js?v=92"></script>
 </body>
 </html>
