@@ -90,10 +90,13 @@ camera.
 - In Geometry mode, pinch-hold a feature-library card, carry it onto the Plan
   canvas, and release to create the feature at that location.
 - Pinch with two hands to zoom, rotate, and pan the current model view.
+- Corners use a magnetic spatial target larger than the visible node. Its grab
+  radius is adjustable under Tracking and calibration and the cursor changes to
+  `CORNER` when a vertex will be selected.
 - Optional shortcut poses use conservative three-frame stabilization: make a
-  fist to cancel the active grab, hold a V sign to fit the model to view, or
-  swipe an open palm left/right to undo/redo. They can be disabled together in
-  Tracking and calibration.
+  fist to cancel the active grab or hold a V sign to fit the model to view.
+  Open-palm Undo/Redo swipes are separately opt-in because normal construction
+  movement can resemble a swipe.
 - Interface mode exposes a dwell cursor for large buttons and movable tool
   windows. Geometry mode leaves the rest of the interface untouched.
 - Calibrate neutral position after changing camera placement. Adjustable
